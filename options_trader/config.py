@@ -27,6 +27,10 @@ class StrategyConfig:
     max_spread_pct: float = 0.10   # (ask - bid) / mid per leg
     require_nonzero_bid: bool = True
 
+    # PR#3-inspired premium band (useful for single-leg and vertical legs)
+    min_premium: float = 0.30
+    max_premium: float = 5.00
+
     # --- Spread construction ---
     spread_widths: list[float] = field(default_factory=lambda: [1.0, 2.0, 5.0])
     # Debit must be <= this fraction of width. 0.45 means max profit is at

@@ -4,3 +4,4 @@ journal.db
 runs/
 data_snapshots/
 .pytest_cache/
+.rh_mcp_token.json
