@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.config import StrategyConfig
-from options_trader.data import YFinanceProvider, MCPDataProvider, SnapshotStore
+from options_trader.data import YFinanceProvider, SnapshotStore
 from options_trader.signals import generate_candidates
 
 
@@ -37,6 +37,7 @@ def main() -> int:
 
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
     if args.provider == "mcp":
+        from options_trader.data import MCPDataProvider
         provider = MCPDataProvider()
         print("Using Robinhood MCP (live data)")
     else:
