@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Trade journal contains personal P&L — keep it local, out of the public repo
+journal/*
+!journal/.gitkeep

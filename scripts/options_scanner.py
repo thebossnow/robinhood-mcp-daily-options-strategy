@@ -1,120 +1,123 @@
 #!/usr/bin/env python3
+"""Daily options scanner.
+
+Screens SPY/QQQ/IWM near-dated chains for single-leg debit trades that
+pass liquidity, expectancy, and sizing rules (see strategy_math.py).
+
+Data source is yfinance (delayed). This is the *screening* pass: the
+MCP-connected agent re-verifies every candidate against live Robinhood
+quotes (get_option_chains -> get_option_instruments -> get_option_quotes)
+before anything is recommended or placed. See AGENT_PROMPT.md.
+
+Run: python scripts/options_scanner.py --account-value 500
+Requires: pip install -r requirements.txt
 """
-Robinhood MCP Daily Options Scanner (Fallback / Placeholder)
 
-This script demonstrates the filtering logic for low-premium, high-liquidity,
-1:2+ RR options trades. Uses public data sources (yfinance, etc.) as fallback
-until full Robinhood MCP options tools are available for live chain queries,
-quotes, and order placement.
-
-When MCP options support is live:
-- Replace data fetching with MCP tool calls (get_options_chain, get_quote, etc.)
-- Use agent to execute via place_order or similar.
-
-Run: python scripts/options_scanner.py
-Requires: pip install yfinance pandas (or use in your agent env)
-"""
+import argparse
+import json
+from dataclasses import asdict
+from datetime import datetime, timezone
 
 import yfinance as yf
-import pandas as pd
-from datetime import datetime, timedelta
 
-UNDERLYINGS = ['SPY', 'QQQ', 'IWM']
-MAX_PREMIUM = 20.0  # per contract
-MIN_RR = 2.0
-MIN_OI = 500
+from strategy_math import LiquidityRules, build_trade_plan, expected_move, mid_price
+
+UNDERLYINGS = ["SPY", "QQQ", "IWM"]
+MAX_EXPIRATIONS = 3  # nearest expirations to scan
 
 
-def get_options_data(ticker: str, expiration: str = None):
-    """Fetch options chain. In production, replace with MCP call."""
-    t = yf.Ticker(ticker)
-    try:
-        if expiration:
-            chain = t.option_chain(expiration)
-        else:
-            exps = t.options
-            if not exps:
-                return None
-            # Pick nearest or specific short-term
-            chain = t.option_chain(exps[0])  # simplistic; improve with logic
-        return chain
-    except Exception as e:
-        print(f"Error fetching {ticker}: {e}")
-        return None
+def _spot_price(ticker: yf.Ticker) -> float:
+    info = ticker.fast_info
+    return float(info.get("last_price") or info.get("lastPrice") or 0)
 
 
-def filter_trades(chain_calls, chain_puts, underlying_price: float):
-    """Filter for criteria. Returns list of candidate trades."""
-    candidates = []
-    # Example simplistic filter for single leg OTM cheap options or basic spreads
-    # In real: implement vertical spread calculator, bid/ask check, OI/volume
-    for df, opt_type in [(chain_calls, 'call'), (chain_puts, 'put')]:
-        if df is None or df.empty:
-            continue
-        # Filter low premium (lastPrice or mid)
-        low_prem = df[(df['lastPrice'] > 0) & (df['lastPrice'] * 100 < MAX_PREMIUM)]
-        for _, row in low_prem.iterrows():
-            strike = row['strike']
-            last = row['lastPrice']
-            oi = row.get('openInterest', 0)
-            vol = row.get('volume', 0)
-            bid = row.get('bid', 0)
-            ask = row.get('ask', 0)
-            
-            # Basic liquidity check (improve with spread %)
-            if oi < MIN_OI and vol < 100:  # loose for demo
+def _days_to_expiry(expiration: str) -> float:
+    exp = datetime.strptime(expiration, "%Y-%m-%d").replace(
+        hour=16, tzinfo=timezone.utc)
+    return max((exp - datetime.now(timezone.utc)).total_seconds() / 86400.0, 0.1)
+
+
+def _atm_expected_move(calls, puts, spot: float) -> float:
+    """1-sigma expected move from the ATM straddle."""
+    atm_call = calls.iloc[(calls["strike"] - spot).abs().argsort()[:1]]
+    atm_put = puts.iloc[(puts["strike"] - spot).abs().argsort()[:1]]
+    call_mid = mid_price(float(atm_call["bid"].iloc[0]), float(atm_call["ask"].iloc[0]))
+    put_mid = mid_price(float(atm_put["bid"].iloc[0]), float(atm_put["ask"].iloc[0]))
+    return expected_move(spot, call_mid, put_mid)
+
+
+def scan_expiration(symbol: str, ticker: yf.Ticker, expiration: str,
+                    spot: float, account_value: float, risk_pct: float,
+                    rules: LiquidityRules):
+    chain = ticker.option_chain(expiration)
+    dte = _days_to_expiry(expiration)
+    em = _atm_expected_move(chain.calls, chain.puts, spot)
+    plans = []
+    for df, opt_type in ((chain.calls, "call"), (chain.puts, "put")):
+        for _, row in df.iterrows():
+            strike = float(row["strike"])
+            # Only consider strikes within one expected move: beyond that,
+            # the "2x" target needs a move the market prices as unlikely.
+            if em > 0 and abs(strike - spot) > em:
                 continue
-            if bid > 0 and ask > 0 and (ask - bid) > (last * 0.2):  # wide spread filter example
-                continue
-            
-            # Simple RR estimate: assume potential to 2x last if moves favorably
-            # Real: use Black-Scholes or historical move prob for realism
-            potential_gain = last * 2  # simplistic target
-            risk = last  # max loss ~ premium
-            rr = potential_gain / risk if risk > 0 else 0
-            
-            if rr >= MIN_RR:
-                candidates.append({
-                    'type': opt_type,
-                    'strike': strike,
-                    'last_price': last,
-                    'oi': oi,
-                    'volume': vol,
-                    'bid': bid,
-                    'ask': ask,
-                    'est_rr': rr,
-                    'notes': 'Low premium OTM candidate - verify live MCP data and realistic move prob'
-                })
-    return candidates
+            plan = build_trade_plan(
+                ticker=symbol, expiration=expiration, option_type=opt_type,
+                strike=strike,
+                bid=float(row.get("bid") or 0), ask=float(row.get("ask") or 0),
+                iv=float(row.get("impliedVolatility") or 0), spot=spot,
+                days_to_expiry=dte,
+                open_interest=int(row.get("openInterest") or 0),
+                volume=int(row.get("volume") or 0),
+                account_value=account_value, risk_pct=risk_pct, rules=rules,
+            )
+            if plan:
+                plans.append(plan)
+    return plans
 
 
 def main():
-    print("Robinhood MCP Options Scanner - Fallback Mode")
-    print(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print("Note: This is illustrative. Use live MCP for accurate current chains.")
-    
-    for und in UNDERLYINGS:
-        print(f"\n=== Scanning {und} ===")
-        t = yf.Ticker(und)
-        price = t.info.get('regularMarketPrice', t.info.get('currentPrice', 0))
-        print(f"Approx underlying price: {price}")
-        
-        exps = t.options[:3]  # nearest few
-        for exp in exps:
-            print(f"  Expiration: {exp}")
-            chain = get_options_data(und, exp)
-            if chain:
-                calls = chain.calls
-                puts = chain.puts
-                cands = filter_trades(calls, puts, price)
-                if cands:
-                    print(f"    Candidates found: {len(cands)}")
-                    for c in cands[:3]:  # top few
-                        print(f"      {c['type'].upper()} {c['strike']}: last ${c['last_price']:.2f}, OI {c['oi']}, Vol {c['volume']}, est RR {c['est_rr']:.1f}x")
-                else:
-                    print("    No strong candidates meeting filters in this expiration.")
-    print("\nRecommendation: Connect agent to live Robinhood MCP for precise, real-time filtering and execution.")
-    print("When options MCP available, extend this to call MCP tools directly.")
+    parser = argparse.ArgumentParser(description="Scan for qualifying daily options trades")
+    parser.add_argument("--account-value", type=float, required=True,
+                        help="Current account value in dollars (sizing input)")
+    parser.add_argument("--risk-pct", type=float, default=0.02,
+                        help="Max fraction of account risked per trade (default 0.02)")
+    parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    args = parser.parse_args()
+
+    rules = LiquidityRules()
+    all_plans = []
+    for symbol in UNDERLYINGS:
+        ticker = yf.Ticker(symbol)
+        spot = _spot_price(ticker)
+        if spot <= 0:
+            print(f"# {symbol}: no spot price, skipping")
+            continue
+        for expiration in ticker.options[:MAX_EXPIRATIONS]:
+            try:
+                all_plans.extend(scan_expiration(
+                    symbol, ticker, expiration, spot,
+                    args.account_value, args.risk_pct, rules))
+            except Exception as exc:  # network/data hiccups shouldn't kill the scan
+                print(f"# {symbol} {expiration}: {exc}")
+
+    all_plans.sort(key=lambda p: p.ev_per_contract, reverse=True)
+
+    if args.json:
+        print(json.dumps([asdict(p) for p in all_plans], indent=2))
+        return
+
+    if not all_plans:
+        print("NO QUALIFYING TRADE TODAY — nothing passed liquidity + expectancy + sizing.")
+        return
+    print(f"{len(all_plans)} candidate(s), best first. Verify against live MCP quotes before trading.\n")
+    for p in all_plans[:10]:
+        print(f"{p.ticker} {p.expiration} {p.strike:g} {p.option_type.upper()}"
+              f" @ ~{p.entry_mid:.2f} mid | debit ${p.debit:.0f}/ct"
+              f" | target {p.profit_target:.2f} / stop {p.stop_loss:.2f}"
+              f" | p(win)~{p.p_win:.0%} EV ${p.ev_per_contract:.2f}/ct"
+              f" | size {p.contracts} ct | OI {p.open_interest} vol {p.volume}"
+              f" spread {p.spread:.0%}")
+
 
 if __name__ == "__main__":
     main()
