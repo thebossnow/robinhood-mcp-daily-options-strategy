@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.config import StrategyConfig
-from options_trader.data import YFinanceProvider, SnapshotStore
+from options_trader.data import YFinanceProvider, MCPDataProvider, SnapshotStore
 from options_trader.signals import generate_candidates
 
 
@@ -31,10 +31,16 @@ def main() -> int:
     ap.add_argument("--save-snapshot", action="store_true",
                     help="Persist chains to data_snapshots/ for backtesting")
     ap.add_argument("--runs-dir", default="runs")
+    ap.add_argument("--provider", choices=["mcp", "yfinance"], default="yfinance",
+                    help="Data source: mcp (Robinhood live) or yfinance (free fallback)")
     args = ap.parse_args()
 
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
-    provider = YFinanceProvider()
+    if args.provider == "mcp":
+        provider = MCPDataProvider()
+        print("Using Robinhood MCP (live data)")
+    else:
+        provider = YFinanceProvider()
     store = SnapshotStore()
 
     all_candidates = []
