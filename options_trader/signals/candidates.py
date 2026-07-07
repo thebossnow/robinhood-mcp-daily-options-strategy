@@ -29,6 +29,7 @@ import pandas as pd
 from ..config import StrategyConfig
 from ..data.provider import ChainSnapshot
 from .probability import prob_above, prob_below
+from .math import expected_move, mid_price  # PR#3 utilities for EM filter + better mids
 
 TRADING_DAYS_PER_YEAR = 365.0  # calendar-day convention to match yfinance IV
 
@@ -167,6 +168,26 @@ def generate_candidates(snap: ChainSnapshot, cfg: StrategyConfig) -> list[Spread
         return []
 
     out: list[SpreadCandidate] = []
+
+    # PR#3-inspired expected move filter (applied to vertical candidate selection)
+    # Compute 1-EM from ATM straddle to avoid far OTM where targets are unrealistic.
+    em = 0.0
+    try:
+        calls = snap.chain[snap.chain["type"] == "call"]
+        puts = snap.chain[snap.chain["type"] == "put"]
+        if not calls.empty and not puts.empty:
+            atm_call_mid = mid_price(
+                calls.iloc[(calls["strike"] - snap.spot).abs().argsort()[:1]]["bid"].iloc[0],
+                calls.iloc[(calls["strike"] - snap.spot).abs().argsort()[:1]]["ask"].iloc[0],
+            )
+            atm_put_mid = mid_price(
+                puts.iloc[(puts["strike"] - snap.spot).abs().argsort()[:1]]["bid"].iloc[0],
+                puts.iloc[(puts["strike"] - snap.spot).abs().argsort()[:1]]["ask"].iloc[0],
+            )
+            em = expected_move(snap.spot, atm_call_mid, atm_put_mid)
+    except Exception:
+        em = 0.0  # fall back gracefully if ATM not available
+
     for opt_type, kind in [("call", "bull_call"), ("put", "bear_put")]:
         side = snap.chain[snap.chain["type"] == opt_type]
         if side.empty:
@@ -174,6 +195,11 @@ def generate_candidates(snap: ChainSnapshot, cfg: StrategyConfig) -> list[Spread
         liquid = side[side.apply(lambda r: leg_passes_liquidity(r, cfg), axis=1)]
         if len(liquid) < 2:
             continue
+
+        # Optional EM filter: prefer strikes reasonably close (adaptable via future config)
+        if em > 0:
+            liquid = liquid[liquid["strike"].abs().sub(snap.spot).abs() <= (em * 1.5)]
+
         rows = list(liquid.sort_values("strike").iterrows())
         for (_, a), (_, b) in combinations(rows, 2):
             width = abs(b["strike"] - a["strike"])

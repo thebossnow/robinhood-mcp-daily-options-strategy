@@ -8,6 +8,10 @@ save the scan for paper trading and the snapshot for backtesting.
 
 Output: a human-readable report plus runs/scan_<timestamp>.json that
 scripts/paper_trade.py can open positions from.
+
+PR#3 synthesis: now uses shared math (expected_move, LiquidityRules concepts)
+for better strike and premium filtering while keeping verticals primary.
+Single-leg support available via signals.math for MCP single-leg flows.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from options_trader.config import StrategyConfig
 from options_trader.data import YFinanceProvider, SnapshotStore
 from options_trader.signals import generate_candidates
+from options_trader.signals.math import expected_move  # PR#3 port (used inside candidates too)
 
 
 def main() -> int:

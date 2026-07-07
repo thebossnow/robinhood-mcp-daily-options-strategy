@@ -23,6 +23,13 @@ risk/reward check was a tautology — `rr = (2 × premium) / premium` is always
 exactly 2. The rewrite keeps the good instincts (strict liquidity, small
 size, journaling, "NO TRADE" as a first-class answer) and replaces the core:
 
+**PR#3 synthesis additions (adapted cleanly):**
+- Shared pure math (expected move from straddle, prob-touch, premium-band liquidity).
+- MCP-aware agent prompt (account preflight, event regime filters, single-leg
+  reality note while preferring verticals).
+- Explicit no-trade logging + 30-trade statistical significance rule.
+- Expected-move strike filtering to avoid unrealistic targets.
+
 | | Before | Now |
 |---|---|---|
 | Structure | single-leg cheap OTM | vertical debit spreads (defined risk) |
