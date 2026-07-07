@@ -1,0 +1,202 @@
+"""SQLite trade journal.
+
+Every recommendation, fill, and exit is recorded with the filter values that
+justified it at entry. The risk manager reads live state (open positions,
+today's realized P&L, consecutive losses) from here, and the periodic review
+loop — human or agent — queries it to find out which setups actually work.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    opened_at TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    expiration TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    long_strike REAL NOT NULL,
+    short_strike REAL NOT NULL,
+    width REAL NOT NULL,
+    contracts INTEGER NOT NULL,
+    entry_debit REAL NOT NULL,          -- per share, after slippage
+    max_loss REAL NOT NULL,             -- total dollars for the position
+    max_profit REAL NOT NULL,
+    p_win REAL,
+    ev_after_costs REAL,                -- per contract, at entry
+    candidate_json TEXT,                -- full candidate snapshot at entry
+    status TEXT NOT NULL DEFAULT 'open',  -- open | closed | expired
+    exit_value REAL,                    -- per share credit received at exit
+    realized_pnl REAL,                  -- total dollars
+    closed_at TEXT,
+    notes TEXT
+);
+"""
+
+
+@dataclass
+class TradeRecord:
+    id: int
+    opened_at: str
+    underlying: str
+    expiration: str
+    kind: str
+    long_strike: float
+    short_strike: float
+    width: float
+    contracts: int
+    entry_debit: float
+    max_loss: float
+    max_profit: float
+    p_win: float | None
+    ev_after_costs: float | None
+    status: str
+    exit_value: float | None
+    realized_pnl: float | None
+    closed_at: str | None
+    notes: str | None
+
+
+class Journal:
+    def __init__(self, path: str | Path = "journal.db"):
+        self.path = Path(path)
+        self._conn = sqlite3.connect(self.path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.executescript(SCHEMA)
+        self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    # --- writes ---
+
+    def record_entry(self, candidate: dict, contracts: int,
+                     entry_debit: float, notes: str = "") -> int:
+        cur = self._conn.execute(
+            """INSERT INTO trades
+               (opened_at, underlying, expiration, kind, long_strike,
+                short_strike, width, contracts, entry_debit, max_loss,
+                max_profit, p_win, ev_after_costs, candidate_json, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                candidate["underlying"],
+                candidate["expiration"],
+                candidate["kind"],
+                candidate["long_strike"],
+                candidate["short_strike"],
+                candidate["width"],
+                contracts,
+                entry_debit,
+                entry_debit * 100.0 * contracts,
+                (candidate["width"] - entry_debit) * 100.0 * contracts,
+                candidate.get("p_win"),
+                candidate.get("ev_after_costs"),
+                json.dumps(candidate),
+                notes,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def record_exit(self, trade_id: int, exit_value: float,
+                    status: str = "closed", notes: str = "") -> TradeRecord:
+        row = self._get_row(trade_id)
+        if row is None:
+            raise KeyError(f"No trade with id {trade_id}")
+        if row["status"] != "open":
+            raise ValueError(f"Trade {trade_id} is already {row['status']}")
+        pnl = (exit_value - row["entry_debit"]) * 100.0 * row["contracts"]
+        self._conn.execute(
+            """UPDATE trades SET status=?, exit_value=?, realized_pnl=?,
+               closed_at=?, notes=COALESCE(NULLIF(notes,'') || ' | ', '') || ?
+               WHERE id=?""",
+            (status, exit_value, pnl,
+             datetime.now().isoformat(timespec="seconds"), notes, trade_id),
+        )
+        self._conn.commit()
+        return self.get(trade_id)
+
+    # --- reads ---
+
+    def _get_row(self, trade_id: int):
+        return self._conn.execute(
+            "SELECT * FROM trades WHERE id=?", (trade_id,)
+        ).fetchone()
+
+    def get(self, trade_id: int) -> TradeRecord:
+        row = self._get_row(trade_id)
+        if row is None:
+            raise KeyError(f"No trade with id {trade_id}")
+        return _to_record(row)
+
+    def open_positions(self) -> list[TradeRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status='open' ORDER BY opened_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
+    def open_risk(self) -> float:
+        """Total max loss currently at risk across open positions."""
+        val = self._conn.execute(
+            "SELECT COALESCE(SUM(max_loss), 0) FROM trades WHERE status='open'"
+        ).fetchone()[0]
+        return float(val)
+
+    def realized_pnl_on(self, day: str) -> float:
+        val = self._conn.execute(
+            """SELECT COALESCE(SUM(realized_pnl), 0) FROM trades
+               WHERE status != 'open' AND substr(closed_at, 1, 10) = ?""",
+            (day,),
+        ).fetchone()[0]
+        return float(val)
+
+    def consecutive_losses(self) -> int:
+        rows = self._conn.execute(
+            """SELECT realized_pnl FROM trades WHERE status != 'open'
+               ORDER BY closed_at DESC, id DESC"""
+        ).fetchall()
+        n = 0
+        for r in rows:
+            if r["realized_pnl"] is not None and r["realized_pnl"] < 0:
+                n += 1
+            else:
+                break
+        return n
+
+    def stats(self) -> dict:
+        rows = self._conn.execute(
+            "SELECT realized_pnl FROM trades WHERE status != 'open'"
+        ).fetchall()
+        pnls = [r["realized_pnl"] for r in rows if r["realized_pnl"] is not None]
+        if not pnls:
+            return {"closed_trades": 0}
+        wins = [p for p in pnls if p > 0]
+        running, peak, max_dd = 0.0, 0.0, 0.0
+        for p in pnls:
+            running += p
+            peak = max(peak, running)
+            max_dd = min(max_dd, running - peak)
+        return {
+            "closed_trades": len(pnls),
+            "win_rate": round(len(wins) / len(pnls), 4),
+            "total_pnl": round(sum(pnls), 2),
+            "expectancy_per_trade": round(sum(pnls) / len(pnls), 2),
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(
+                sum(p for p in pnls if p <= 0) / max(1, len(pnls) - len(wins)), 2
+            ),
+            "max_drawdown": round(max_dd, 2),
+        }
+
+
+def _to_record(row: sqlite3.Row) -> TradeRecord:
+    d = dict(row)
+    d.pop("candidate_json", None)
+    return TradeRecord(**d)

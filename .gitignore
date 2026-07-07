@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+journal.db
+runs/
+data_snapshots/
+.pytest_cache/
