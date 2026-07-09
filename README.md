@@ -161,3 +161,35 @@ Non-negotiable properties, enforced in code rather than prose:
   improvement margin, as a guard against multiple-comparisons data mining.
 - **Human merge.** An accepted variant becomes a pull request for review.
   Nothing the loop produces merges automatically.
+
+## DoltHub historical backtest (free EOD data)
+
+The free [post-no-preference/options](https://www.dolthub.com/repositories/post-no-preference/options)
+DoltHub database has end-of-day US equity option chains back to ~2019.
+`scripts/import_dolthub.py` converts it into this repo's snapshot format so
+the same backtest and verifier code runs over years of history immediately,
+instead of waiting for forward collection to accumulate:
+
+```bash
+python scripts/import_dolthub.py --symbols SPY QQQ IWM \
+    --start 2024-01-01 --end 2026-06-30
+python scripts/backtest.py --snapshots-dir data_snapshots_dolthub \
+    --config configs/dolthub_backtest.json
+```
+
+Read results with these caveats in mind:
+
+- **The dataset has no volume or open-interest columns.** Imported rows
+  carry 0 for both, and `configs/dolthub_backtest.json` zeroes those two
+  liquidity minimums so candidates can form at all. Every other filter
+  (live bid, ≤10% spread, structure, EV after costs) still applies — but
+  results are **optimistic on liquidity**: some historical "trades" may
+  have been practically unfillable.
+- EOD snapshots only (stamped 16:00) — no intraday management can be
+  evaluated, matching the engine's hold-to-expiry assumption.
+- Community-maintained data: spot-check a few chains against a broker.
+- Imports live in `data_snapshots_dolthub/`, deliberately separate from the
+  live 45-minute collection in `data_snapshots/` — the forward-collected
+  set has real volume/OI and intraday quotes and remains the
+  higher-fidelity benchmark. Agreement between the two is the signal that
+  matters.
