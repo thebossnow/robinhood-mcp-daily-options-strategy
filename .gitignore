@@ -5,3 +5,4 @@ runs/
 data_snapshots/
 .pytest_cache/
 .rh_mcp_token.json
+data_snapshots_dolthub/
