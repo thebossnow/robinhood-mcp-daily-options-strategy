@@ -128,10 +128,14 @@ class SnapshotStore:
         self.root = Path(root)
 
     def save(self, snap: ChainSnapshot) -> Path:
+        # Filename carries the snapshot time, not just the date: intraday
+        # collection (e.g. every 45 minutes) must never overwrite earlier
+        # snapshots from the same day.
         day = snap.taken_at[:10]
+        hms = snap.taken_at[11:19].replace(":", "")
         dir_ = self.root / snap.underlying
         dir_.mkdir(parents=True, exist_ok=True)
-        base = dir_ / f"{day}_exp{snap.expiration}"
+        base = dir_ / f"{day}_{hms}_exp{snap.expiration}"
         snap.chain.to_csv(base.with_suffix(".csv"), index=False)
         meta = {
             "underlying": snap.underlying,
