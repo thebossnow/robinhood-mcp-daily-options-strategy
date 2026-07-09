@@ -1,9 +1,0 @@
-Thu Jul  9 06:00:01 PDT 2026: Starting data collection at 09:00 ET
-Traceback (most recent call last):
-  File "/home/banderson/robinhood-mcp-daily-options-strategy/scripts/scan.py", line 32, in <module>
-    from options_trader.config import StrategyConfig
-  File "/home/banderson/robinhood-mcp-daily-options-strategy/options_trader/config.py", line 39
-    >>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
-            ^
-SyntaxError: leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers
-Thu Jul  9 06:00:01 PDT 2026: Data collection run completed
