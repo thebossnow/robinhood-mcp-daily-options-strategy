@@ -242,15 +242,45 @@ class MCPDataProvider(DataProvider):
             raise RuntimeError(f"No chains for {underlying}")
         chain_id = chains[0]["id"]
 
-        # Get all instruments for this expiration (single page — 100 is plenty)
-        data = _parse_result(
-            self._call("get_option_instruments", {
+        # Get all instruments for this expiration with full pagination.
+        # Previously took only first page (100 rows) which silently truncated chains
+        # (missing ATM and OTM strikes). Now follows cursor until exhausted.
+        all_instruments: list[dict] = []
+        cursor = None
+        max_pages = 50
+        for _ in range(max_pages):
+            args = {
                 "chain_id": chain_id,
                 "expiration_dates": expiration,
                 "state": "active",
-            })
-        )
-        all_instruments: list[dict] = data.get("instruments", [])
+            }
+            if cursor:
+                args["cursor"] = cursor
+            data = _parse_result(
+                self._call("get_option_instruments", args)
+            )
+            page = data.get("instruments") or data.get("results") or []
+            all_instruments.extend(page)
+
+            # Extract cursor from common locations (top level or pagination object)
+            cursor = None
+            for scope in (data, data.get("pagination") or {}):
+                for key in ("next_cursor", "cursor", "next", "next_page_token"):
+                    val = scope.get(key)
+                    if val:
+                        if isinstance(val, str) and val.startswith("http"):
+                            from urllib.parse import parse_qs, urlparse
+                            qs = parse_qs(urlparse(val).query)
+                            cursor = qs.get("cursor", [None])[0] or val
+                        else:
+                            cursor = val
+                        break
+                if cursor:
+                    break
+            if not cursor or not page:
+                break
+        else:
+            raise RuntimeError(f"Instrument pagination did not terminate for {underlying} {expiration}")
 
         if not all_instruments:
             raise RuntimeError(f"No instruments for {underlying} {expiration}")
