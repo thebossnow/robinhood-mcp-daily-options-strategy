@@ -9,14 +9,12 @@ save the scan for paper trading and the snapshot for backtesting.
 
 Output: a human-readable report plus runs/scan_<timestamp>.json that
 scripts/paper_trade.py can open positions from.
-<<<<<<< HEAD
 
 PR#3 synthesis: now uses shared math (expected_move, LiquidityRules concepts)
 for better strike and premium filtering while keeping verticals primary.
 Single-leg support available via signals.math for MCP single-leg flows.
-=======
+
 (With --data-only the report and runs/ JSON are skipped.)
->>>>>>> faec172 (Add storage fix for time in snapshot filenames + --data-only flag + collect_data.sh for 45-min cron schedule)
 """
 
 from __future__ import annotations
