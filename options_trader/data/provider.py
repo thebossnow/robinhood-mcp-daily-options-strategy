@@ -131,7 +131,11 @@ class SnapshotStore:
         day = snap.taken_at[:10]
         dir_ = self.root / snap.underlying
         dir_.mkdir(parents=True, exist_ok=True)
-        base = dir_ / f"{day}_exp{snap.expiration}"
+        # Include time in filename so multiple snapshots per day (e.g. every 45 min)
+        # for the same expiration do not overwrite each other.
+        t = datetime.fromisoformat(snap.taken_at)
+        time_str = t.strftime("%H%M%S")
+        base = dir_ / f"{day}_{time_str}_exp{snap.expiration}"
         snap.chain.to_csv(base.with_suffix(".csv"), index=False)
         meta = {
             "underlying": snap.underlying,

@@ -4,14 +4,19 @@ save the scan for paper trading and the snapshot for backtesting.
 
     python scripts/scan.py                     # scan with default config
     python scripts/scan.py --save-snapshot     # also store chains for backtest
+    python scripts/scan.py --data-only --save-snapshot  # collect snapshots only (no report)
     python scripts/scan.py --config my.json    # custom StrategyConfig
 
 Output: a human-readable report plus runs/scan_<timestamp>.json that
 scripts/paper_trade.py can open positions from.
+<<<<<<< HEAD
 
 PR#3 synthesis: now uses shared math (expected_move, LiquidityRules concepts)
 for better strike and premium filtering while keeping verticals primary.
 Single-leg support available via signals.math for MCP single-leg flows.
+=======
+(With --data-only the report and runs/ JSON are skipped.)
+>>>>>>> faec172 (Add storage fix for time in snapshot filenames + --data-only flag + collect_data.sh for 45-min cron schedule)
 """
 
 from __future__ import annotations
@@ -35,6 +40,9 @@ def main() -> int:
     ap.add_argument("--config", help="Path to StrategyConfig JSON")
     ap.add_argument("--save-snapshot", action="store_true",
                     help="Persist chains to data_snapshots/ for backtesting")
+    ap.add_argument("--data-only", action="store_true",
+                    help="Data collection mode: only save snapshots (skip human-readable "
+                         "report and runs/ JSON). Useful for frequent automated runs.")
     ap.add_argument("--runs-dir", default="runs")
     ap.add_argument("--provider", choices=["mcp", "yfinance"], default="yfinance",
                     help="Data source: mcp (Robinhood live) or yfinance (free fallback)")
@@ -50,8 +58,9 @@ def main() -> int:
     store = SnapshotStore()
 
     all_candidates = []
-    print(f"Scan {datetime.now().isoformat(timespec='minutes')} — "
-          f"underlyings: {', '.join(cfg.underlyings)}, DTE {cfg.min_dte}-{cfg.max_dte}")
+    if not args.data_only:
+        print(f"Scan {datetime.now().isoformat(timespec='minutes')} — "
+              f"underlyings: {', '.join(cfg.underlyings)}, DTE {cfg.min_dte}-{cfg.max_dte}")
 
     for und in cfg.underlyings:
         try:
@@ -73,9 +82,13 @@ def main() -> int:
             if args.save_snapshot:
                 store.save(snap)
             cands = generate_candidates(snap, cfg)
-            print(f"  {und} {exp} (spot {snap.spot:.2f}): "
-                  f"{len(cands)} candidates pass all filters")
+            if not args.data_only:
+                print(f"  {und} {exp} (spot {snap.spot:.2f}): "
+                      f"{len(cands)} candidates pass all filters")
             all_candidates.extend(cands)
+
+    if args.data_only:
+        return 0
 
     all_candidates.sort(key=lambda c: c.ev_after_costs, reverse=True)
     top = all_candidates[: cfg.top_n]
