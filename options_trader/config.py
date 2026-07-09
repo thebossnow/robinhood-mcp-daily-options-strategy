@@ -31,6 +31,12 @@ class StrategyConfig:
     min_premium: float = 0.30
     max_premium: float = 5.00
 
+<<<<<<< HEAD
+=======
+    # EM filter multiplier for strike selection (synthesis)
+    em_filter_multiplier: float = 1.5
+
+>>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
     # --- Spread construction ---
     spread_widths: list[float] = field(default_factory=lambda: [1.0, 2.0, 5.0])
     # Debit must be <= this fraction of width. 0.45 means max profit is at

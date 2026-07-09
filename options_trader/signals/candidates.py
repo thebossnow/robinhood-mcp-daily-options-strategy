@@ -29,7 +29,11 @@ import pandas as pd
 from ..config import StrategyConfig
 from ..data.provider import ChainSnapshot
 from .probability import prob_above, prob_below
+<<<<<<< HEAD
 from .math import expected_move, mid_price  # PR#3 utilities for EM filter + better mids
+=======
+from .math import expected_move, mid_price  # PR#3 utilities for EM filter + better mids
+>>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
 
 TRADING_DAYS_PER_YEAR = 365.0  # calendar-day convention to match yfinance IV
 
@@ -88,6 +92,9 @@ def leg_passes_liquidity(row: pd.Series, cfg: StrategyConfig) -> bool:
     if mid <= 0:
         return False
     if (row["ask"] - row["bid"]) / mid > cfg.max_spread_pct:
+        return False
+    # PR#3-inspired premium band
+    if mid < cfg.min_premium or mid > cfg.max_premium:
         return False
     return True
 
@@ -169,13 +176,19 @@ def generate_candidates(snap: ChainSnapshot, cfg: StrategyConfig) -> list[Spread
 
     out: list[SpreadCandidate] = []
 
+<<<<<<< HEAD
+    # PR#3-inspired expected move filter (applied to vertical candidate selection)
     # PR#3-inspired expected move filter (applied to vertical candidate selection)
     # Compute 1-EM from ATM straddle to avoid far OTM where targets are unrealistic.
+=======
+    # Synthesis: expected move filter (PR#3-inspired)
+>>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
     em = 0.0
     try:
         calls = snap.chain[snap.chain["type"] == "call"]
         puts = snap.chain[snap.chain["type"] == "put"]
         if not calls.empty and not puts.empty:
+<<<<<<< HEAD
             atm_call_mid = mid_price(
                 calls.iloc[(calls["strike"] - snap.spot).abs().argsort()[:1]]["bid"].iloc[0],
                 calls.iloc[(calls["strike"] - snap.spot).abs().argsort()[:1]]["ask"].iloc[0],
@@ -187,6 +200,15 @@ def generate_candidates(snap: ChainSnapshot, cfg: StrategyConfig) -> list[Spread
             em = expected_move(snap.spot, atm_call_mid, atm_put_mid)
     except Exception:
         em = 0.0  # fall back gracefully if ATM not available
+=======
+            call_idx = (calls["strike"] - snap.spot).abs().idxmin()
+            put_idx = (puts["strike"] - snap.spot).abs().idxmin()
+            atm_call_mid = mid_price(float(calls.loc[call_idx, "bid"]), float(calls.loc[call_idx, "ask"]))
+            atm_put_mid = mid_price(float(puts.loc[put_idx, "bid"]), float(puts.loc[put_idx, "ask"]))
+            em = expected_move(snap.spot, atm_call_mid, atm_put_mid)
+    except Exception:
+        em = 0.0
+>>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
 
     for opt_type, kind in [("call", "bull_call"), ("put", "bear_put")]:
         side = snap.chain[snap.chain["type"] == opt_type]
@@ -196,9 +218,15 @@ def generate_candidates(snap: ChainSnapshot, cfg: StrategyConfig) -> list[Spread
         if len(liquid) < 2:
             continue
 
+<<<<<<< HEAD
         # Optional EM filter: prefer strikes reasonably close (adaptable via future config)
         if em > 0:
             liquid = liquid[liquid["strike"].abs().sub(snap.spot).abs() <= (em * 1.5)]
+=======
+        # EM filter using configurable multiplier
+        if em > 0:
+            liquid = liquid[liquid["strike"].abs().sub(snap.spot).abs() <= (em * cfg.em_filter_multiplier)]
+>>>>>>> 01d7ca3 (Add premium band and EM filter multiplier from synthesis to config; integrate EM filter in candidates.)
 
         rows = list(liquid.sort_values("strike").iterrows())
         for (_, a), (_, b) in combinations(rows, 2):
