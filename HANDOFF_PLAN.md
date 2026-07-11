@@ -21,10 +21,12 @@ This document serves as a complete handoff for the ongoing development of the AI
   - Storage fix: snapshots now use time in filename (`YYYY-MM-DD_HHMMSS_exp...`) to support intra-day multiples.
   - CI workflow (`.github/workflows/ci.yml`).
   - `PHASE2_VALIDATION.md` guide.
+  - DoltHub EOD option-chain importer (`options_trader/data/dolthub.py`, `scripts/import_dolthub.py`, `configs/dolthub_backtest.json`) for historical backtesting from external EOD data.
+  - Karpathy autoresearch loop (`loop/evaluate.py`, `loop/run_loop.py`, `loop/program.md`): stability scoring, decay checks, multi-variant generation, OOS gates.
 - Data: 44+ snapshots (including multi-per-day from 2026-07-08), runs/ logs.
 - Cron active: `CRON_TZ=America/New_York` + `*/15 9-16 * * 1-5` (ET-pinned, version-controlled in `crontab.txt`); the script matches ET slots (9:00, 9:45, ..., 16:30) within a ±2 min tolerance and runs `--data-only --save-snapshot --provider mcp`.
 - No open PRs with overlaps (clean PR #9 for CI+docs merged/ incorporated; old PRs closed/superseded).
-- Tests: 83+ passing.
+- Tests: 113 passing (includes `test_dolthub.py`, `test_loop_evaluate.py`).
 - Journal empty (pure data collection phase; no live/paper trades yet).
 - Botched merge issues (conflict markers, provider regression) resolved in current main.
 
@@ -33,6 +35,7 @@ This document serves as a complete handoff for the ongoing development of the AI
 - Enabled frequent data collection without file overwrites or report spam.
 - Preserved superior verticals architecture over single-leg rewrite.
 - Honest dataset building for backtesting.
+- Added a historical backtest path (DoltHub EOD importer) and autoresearch-loop scaffolding for systematic strategy iteration.
 
 ## Overall Roadmap
 The project follows a gated, data-first approach before any real money exposure.
@@ -73,8 +76,8 @@ The project follows a gated, data-first approach before any real money exposure.
 **Key Tasks:**
 1. **Full Test Suite (ongoing)**
    - `python -m pytest tests/ -v`
-   - Must pass (focus: `test_signals_math.py`, `test_mcp_provider.py`, `test_candidates.py`, `test_risk_and_journal.py`, `test_execution_and_backtest.py`).
-   - Current: 83+ passing.
+   - Must pass (focus: `test_signals_math.py`, `test_mcp_provider.py`, `test_candidates.py`, `test_risk_and_journal.py`, `test_execution_and_backtest.py`, `test_dolthub.py`, `test_loop_evaluate.py`).
+   - Current: 113 passing.
 
 2. **Data Collection (high priority - already automated)**
    - Run `scripts/scan.py --data-only --save-snapshot --provider mcp` frequently.
@@ -119,13 +122,18 @@ The project follows a gated, data-first approach before any real money exposure.
    - Entry: mid + slippage; hold to expiry, settle at intrinsic.
    - Compare to modeled EV/p_win.
    - Goal: Positive expectancy after costs.
+   - Historical option-chain history (beyond live-collected snapshots) can be imported from DoltHub EOD data via `python scripts/import_dolthub.py` (see `configs/dolthub_backtest.json`) to bootstrap backtests before 60 live days accumulate.
 
-7. **CI / Automation**
+7. **Autoresearch Loop (experimental)**
+   - `python loop/run_loop.py` drives iterative strategy research (`loop/evaluate.py`): stability scoring, decay checks, multi-variant generation, out-of-sample gates. See `loop/program.md`.
+   - Numbers still come from deterministic code; the loop proposes/evaluates variants, it does not bypass the risk/EV gates.
+
+8. **CI / Automation**
    - GitHub Actions: `.github/workflows/ci.yml` (pytest on 3.10-3.12).
    - Ensure green on PRs/pushes.
    - Logs: `logs/data_collection.log`.
 
-8. **Small Issues / Polish**
+9. **Small Issues / Polish**
    - Monitor EM filter (idxmin + configurable multiplier).
    - Harden ATM straddle extraction if edge cases appear.
    - Token security (rotation; `.rh_mcp_token.json` is already gitignored).
@@ -184,6 +192,8 @@ The project follows a gated, data-first approach before any real money exposure.
 ## Key Code Areas & Reuse
 - **Data Collection:** `scripts/scan.py` (core + --data-only), `options_trader/data/provider.py` (SnapshotStore with time fix), `scripts/collect_data.sh` (cron wrapper + ET slot matching w/ ±2 min tolerance), `crontab.txt` (version-controlled ET-pinned schedule).
 - **Backtesting:** `scripts/backtest.py`, `options_trader/backtest/engine.py` (per-snapshot independent, uses taken_at).
+- **Historical Data (DoltHub):** `options_trader/data/dolthub.py`, `scripts/import_dolthub.py`, `configs/dolthub_backtest.json` — imports EOD option chains for backtesting beyond live-collected snapshots.
+- **Autoresearch Loop:** `loop/run_loop.py`, `loop/evaluate.py`, `loop/program.md` — stability scoring, decay checks, multi-variant generation, OOS gates.
 - **Strategy Core:** `options_trader/config.py` (DTE, liquidity, premium, em_filter_multiplier, risk limits), `options_trader/signals/` (candidates.py with EM, math.py ported, probability.py).
 - **Risk/Execution:** `options_trader/risk/manager.py`, `options_trader/execution/paper.py`, `options_trader/journal/journal.py` (no-trade support).
 - **MCP:** `options_trader/data/mcp_provider.py` (hardened pagination + validation).
@@ -218,12 +228,11 @@ The project follows a gated, data-first approach before any real money exposure.
 
 ## Next Immediate Actions (Post-Handoff)
 1. ✓ Done: CI + docs on main (PR #9 incorporated); cron hardening merged (PR #10 — ET-pinned `crontab.txt` + ±2 min tolerance).
-2. Rebase any feature branches (e.g., mcp-data-provider) onto main if needed.
+2. ✓ Done: feature branches landed and cleaned up — `mcp-data-provider` superseded/deleted; `feature/dolthub-importer` rebased + merged (PR #12); `feature/karpathy-autoresearch-loop` deleted after its content landed. `origin` now has only `main`.
 3. Run full validation per PHASE2_VALIDATION.md (focus data collection + paper loop).
 4. Monitor cron logs + snapshot growth.
 5. Once 60 days/40 trades: Review stats, decide on live pilot.
-6. Push any local commits; clean old branches (e.g., `git push origin --delete mcp-data-provider`).
-7. Update this handoff as phases complete.
+6. Update this handoff as phases complete.
 
 ## Contact / Ownership
 - Primary: thebossnow (owner).
