@@ -211,10 +211,12 @@ Three variants (`options_trader/signals/credit.py`):
 | `condor_sym` | short ~20Δ + wing | short ~20Δ + wing | pure range bet |
 | `condor_asym` | short ~20Δ + wing | short ~12Δ + wing | more room on the side bull runs punish |
 
-Shared mechanics: 30–45 DTE entries (closest to 38), wings ~2% of spot,
-weekly entry cadence, managed mechanically — close at 50% of entry credit,
-exit on short-strike breach, hard exit at 21 DTE. No rolling, no
-discretion. Fills pay slippage (half-spread fraction) both ways.
+Shared mechanics: 25–50 DTE entries targeting 45 (the classic 30–45 window
+falls between this dataset's rotating ~{11–16, 25–32, 46} DTE quote
+buckets), wings ~2% of spot, weekly entry cadence, managed mechanically —
+close at 50% of entry credit, exit on short-strike breach, time exit at
+min(21 DTE, half the entry DTE). No rolling, no discretion. Fills pay
+slippage (half-spread fraction) both ways.
 
 ```bash
 python scripts/backtest_credit.py --symbols SPY QQQ IWM XLF XLE \
@@ -233,3 +235,31 @@ exits (also pessimistic for a short-premium book). It is an expectancy
 study, not a portfolio simulation: one contract per position, overlapping
 positions are correlated, and trade counts overstate statistical
 independence.
+
+### First results (2022-01-03 → 2026-06-30, SPY/XLF/XLE): no edge found
+
+The dataset does not cover QQQ or IWM (verified directly — it has DIA,
+SPY, XLE, XLF among liquid ETFs), so the run is SPY/XLF/XLE, 976 trades.
+All three variants were **negative after costs** (expectancy −$47 to −$62
+per contract, profit factor ≈ 0.4, win rates 33–38%). Decomposition:
+
+- **Breach exits are the dominant cost**: 46% of trades stopped out on a
+  short-strike touch, all losers, −$160 average. Touch probability at
+  these deltas is ~2× the expiry ITM probability, so stop-on-touch
+  converts a majority-winner structure into a majority-loser one. With
+  breach exits off, expectancy improves to ≈ −$39/trade — still negative.
+- **Pre-cost, the strategy is ≈ breakeven only on SPY** (condor_sym
+  −$1.5/trade with zero slippage); XLF is mildly negative; XLE is ruinous
+  (condor win rate 2% — the 2022 energy trend walked straight through the
+  "rangebound" range). Slippage adds ~$10–25/trade of drag.
+- 78% of exits are model-marked (see `mark_source`), so treat magnitudes
+  as approximate; the sign and the breach-exit decomposition are robust
+  across the marks-only subset.
+
+Read this the way the repo reads "NO QUALIFYING TRADE": a valid, useful
+outcome. The mechanics most often quoted in retail playbooks did not
+survive contact with 4.5 years of data on these underlyings under this
+fill model. Untested levers that could change the picture (candidates for
+the autoresearch loop, with out-of-sample gates): an IV-rank entry filter,
+index-only universes, wider wings, lower deltas, and profit-take-only
+management without breach stops.

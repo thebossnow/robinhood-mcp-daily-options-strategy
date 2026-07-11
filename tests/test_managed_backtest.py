@@ -189,15 +189,26 @@ class TestCadence:
         assert {t.variant for t in result.trades} == {"put_spread", "condor"}
 
     def test_weekly_entries_stack_positions(self):
-        # Entries allowed for 3 weeks; the third week is only 25 DTE from
-        # the sole expiration, below min_dte=30, so 2 positions stack and
-        # both time-exit.
+        # Entries allowed for 3 weeks (the third at 25 DTE, the window's
+        # floor); 3 positions stack and all time-exit.
         history = FakeHistory({d: 1.0 for d in trading_days()})
         engine = ManagedBacktestEngine(history, spot_lookup())
         result = engine.run([SYMBOL], ENTRY, checkpoints()[2], [PUT_SPREAD])
-        assert len(result.trades) == 2
-        assert {t.entry_date for t in result.trades} == set(checkpoints()[:2])
-        assert result.skipped_no_expiration == 1
+        assert len(result.trades) == 3
+        assert {t.entry_date for t in result.trades} == set(checkpoints()[:3])
+
+    def test_time_exit_scales_with_entry_dte(self):
+        # A 25-DTE entry must not be force-closed a few days in: threshold
+        # is min(21, 0.5*25)=12, so the week-3 entry exits at 11 DTE.
+        history = FakeHistory({d: 1.0 for d in trading_days()})
+        engine = ManagedBacktestEngine(history, spot_lookup())
+        result = engine.run([SYMBOL], ENTRY, checkpoints()[2], [PUT_SPREAD])
+        short_entry = [t for t in result.trades if t.dte_at_entry == 25][0]
+        exit_dte = (pd.Timestamp(EXPIRATION)
+                    - pd.Timestamp(short_entry.exit_date)).days
+        assert short_entry.exit_reason == "time_exit"
+        assert exit_dte <= 12
+        assert short_entry.days_held >= 7
 
 
 class TestSummary:

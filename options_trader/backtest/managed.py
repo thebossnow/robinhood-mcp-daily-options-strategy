@@ -279,7 +279,8 @@ class ManagedBacktestEngine:
             if (pos.short_put_strike is not None and spot < pos.short_put_strike) or \
                (pos.short_call_strike is not None and spot > pos.short_call_strike):
                 reason = "breach"
-        if reason is None and _dte(day, pos.expiration) <= cfg.time_exit_dte:
+        if reason is None and _dte(day, pos.expiration) <= \
+                cfg.time_exit_threshold(pos.dte_at_entry):
             reason = "time_exit"
 
         if reason is None:

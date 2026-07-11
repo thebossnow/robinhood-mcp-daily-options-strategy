@@ -72,17 +72,28 @@ class CreditVariantConfig:
     # Wing distance as a fraction of spot (snapped to available strikes).
     wing_width_frac: float = 0.02
     # --- Entry gates ---
-    min_dte: int = 30
-    max_dte: int = 45
-    target_dte: int = 38
+    # The classic playbook says 30-45 DTE, but the DoltHub EOD dataset
+    # quotes expirations at rotating ~{11-16, 25-32, 46} DTE buckets in
+    # 2022-2025, which a 30-45 window falls between (1-in-4 weeks hit).
+    # 25-50 targeting 45 captures ~96% of weeks with the same intent.
+    min_dte: int = 25
+    max_dte: int = 50
+    target_dte: int = 45
     # Reject entries whose net credit is under this fraction of the widest
     # side's width (risk-reward floor). Recorded on every position either way.
     min_credit_frac: float = 0.20
     min_short_bid: float = 0.05    # short legs must have a real market
-    # --- Management (exits, checked daily on EOD marks in this order) ---
+    # --- Management (exits, checked on EOD marks in this order) ---
     profit_take_frac: float = 0.50   # close at 50% of entry credit captured
     exit_on_breach: bool = True      # close when spot crosses a short strike
-    time_exit_dte: int = 21          # close regardless at 21 DTE
+    # Close regardless at min(time_exit_dte, time_exit_frac * entry DTE):
+    # 21 DTE for a ~45 DTE entry, proportionally sooner for shorter entries
+    # so a 25-DTE entry isn't force-closed days after opening.
+    time_exit_dte: int = 21
+    time_exit_frac: float = 0.5
+
+    def time_exit_threshold(self, dte_at_entry: int) -> int:
+        return min(self.time_exit_dte, int(dte_at_entry * self.time_exit_frac))
 
     def to_dict(self) -> dict:
         return asdict(self)
