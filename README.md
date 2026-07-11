@@ -137,3 +137,59 @@ up front.
 *tool contract*: the agent runs the pipeline and reports its numbers; it may
 veto trades on qualitative grounds (event risk, regime) but may never
 override a risk refusal or replace computed numbers with its own.
+
+## Autoresearch loop (design stage)
+
+`loop/` holds the design for a propose→verify improvement loop over the
+strategy's *signal* parameters: `loop/program.md` is the design doc and
+`loop/evaluate.py` is the verifier. Current status, honestly stated: the
+verifier is implemented and unit-tested; the proposal/orchestration step
+(`loop/run_loop.py`) is a stub and does not run autonomously.
+
+Non-negotiable properties, enforced in code rather than prose:
+
+- **Risk limits are frozen.** The verifier rejects any variant that changes
+  `account_equity`, `max_risk_per_trade_pct`, `daily_loss_limit_pct`,
+  `max_open_positions`, or `max_consecutive_losses`.
+- **Data gates.** No evaluation until the snapshot dataset spans ≥30 distinct
+  scan days and the baseline backtest settles ≥40 trades. Intraday snapshots
+  are deduplicated to one per day per underlying/expiration so correlated
+  samples don't inflate the statistics.
+- **Walk-forward out-of-sample.** The most recent ~30% of scan days are held
+  out; a variant must improve in-sample *and* not regress out-of-sample.
+- **Escalating acceptance bar.** Each rejected attempt raises the required
+  improvement margin, as a guard against multiple-comparisons data mining.
+- **Human merge.** An accepted variant becomes a pull request for review.
+  Nothing the loop produces merges automatically.
+
+## DoltHub historical backtest (free EOD data)
+
+The free [post-no-preference/options](https://www.dolthub.com/repositories/post-no-preference/options)
+DoltHub database has end-of-day US equity option chains back to ~2019.
+`scripts/import_dolthub.py` converts it into this repo's snapshot format so
+the same backtest and verifier code runs over years of history immediately,
+instead of waiting for forward collection to accumulate:
+
+```bash
+python scripts/import_dolthub.py --symbols SPY QQQ IWM \
+    --start 2024-01-01 --end 2026-06-30
+python scripts/backtest.py --snapshots-dir data_snapshots_dolthub \
+    --config configs/dolthub_backtest.json
+```
+
+Read results with these caveats in mind:
+
+- **The dataset has no volume or open-interest columns.** Imported rows
+  carry 0 for both, and `configs/dolthub_backtest.json` zeroes those two
+  liquidity minimums so candidates can form at all. Every other filter
+  (live bid, ≤10% spread, structure, EV after costs) still applies — but
+  results are **optimistic on liquidity**: some historical "trades" may
+  have been practically unfillable.
+- EOD snapshots only (stamped 16:00) — no intraday management can be
+  evaluated, matching the engine's hold-to-expiry assumption.
+- Community-maintained data: spot-check a few chains against a broker.
+- Imports live in `data_snapshots_dolthub/`, deliberately separate from the
+  live 45-minute collection in `data_snapshots/` — the forward-collected
+  set has real volume/OI and intraday quotes and remains the
+  higher-fidelity benchmark. Agreement between the two is the signal that
+  matters.

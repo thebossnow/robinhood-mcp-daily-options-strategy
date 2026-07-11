@@ -3,6 +3,7 @@ __pycache__/
 journal.db
 runs/
 data_snapshots/
+data_snapshots_dolthub/
 .pytest_cache/
 .rh_mcp_token.json
 
