@@ -1,0 +1,13 @@
+# Data-collection crontab for this repo.
+#
+# Install with:   crontab crontab.txt
+# Inspect with:   crontab -l
+#
+# NOTE: the job path below is absolute; adjust it if the repo lives elsewhere.
+#
+# Cron for data collection: run the wrapper every 15 min Mon-Fri during the ET
+# market window. CRON_TZ pins scheduling to Eastern regardless of system TZ, so
+# the schedule stays correct even if the machine's timezone changes.
+# The script matches exact ET slots (9:00,9:45,...,16:30) within a 2-min tolerance.
+CRON_TZ=America/New_York
+*/15 9-16 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/collect_data.sh
