@@ -193,3 +193,33 @@ Read results with these caveats in mind:
   set has real volume/OI and intraday quotes and remains the
   higher-fidelity benchmark. Agreement between the two is the signal that
   matters.
+
+## Calibration study: do the model's numbers predict reality?
+
+Every candidate carries model outputs — `p_win`/`p_loss` from N(d2) at
+market implied vol, and probability-weighted `ev_after_costs`. Those come
+from the market's own risk-neutral pricing plus a crude middle-region
+approximation, so a positive predicted EV can be real edge (skew harvested
+between legs) or pure model artifact. Before trusting the EV ranking — and
+before any sizing upgrade that would consume it (e.g. edge-proportional
+fractional-Kelly sizing under the fixed 1% cap) — check calibration against
+settled outcomes:
+
+```bash
+python scripts/backtest.py --snapshots-dir data_snapshots_dolthub \
+    --config configs/dolthub_backtest.json \
+    --save-trades runs/dolthub_trades.json
+python scripts/calibrate.py runs/dolthub_trades.json           # pooled
+python scripts/calibrate.py runs/dolthub_trades.json --by kind # per-slice
+```
+
+The report (`options_trader/backtest/calibration.py`) shows reliability
+tables (predicted probability vs. realized frequency, with Wilson
+intervals) for both the win and loss tails, Brier skill vs. a base-rate
+predictor, and predicted-EV-vs-realized-P&L by quantile with the OLS slope.
+Reading it: probabilities inside their intervals and an EV slope near 1
+mean the signal is informative; skill ≤ 0 or a slope near 0 means the
+surfaced "edge" doesn't cash — fix the signals before building anything on
+top of them. The report prints its own caveats: same-day trades across
+correlated underlyings are not independent samples, and DoltHub results
+are optimistic on liquidity.

@@ -7,12 +7,18 @@ are reported as skipped, never guessed.
 
     python scripts/backtest.py
     python scripts/backtest.py --per-snapshot-trades 2 --config my.json
+
+Pass --save-trades to write the settled trades to JSON for downstream
+analysis (scripts/calibrate.py reads that file).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,6 +33,9 @@ def main() -> int:
     ap.add_argument("--config", help="Path to StrategyConfig JSON")
     ap.add_argument("--snapshots-dir", default="data_snapshots")
     ap.add_argument("--per-snapshot-trades", type=int, default=1)
+    ap.add_argument("--save-trades", metavar="PATH",
+                    help="Write settled trades + summary to a JSON file "
+                         "(input for scripts/calibrate.py)")
     args = ap.parse_args()
 
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
@@ -60,6 +69,19 @@ def main() -> int:
                   f"{t['long_strike']:g}/{t['short_strike']:g} exp {t['expiration']}: "
                   f"entry {t['entry_debit']:.2f} → exit {t['exit_value']:.2f} "
                   f"(P&L ${t['pnl']:.2f})")
+
+    if args.save_trades:
+        out_path = Path(args.save_trades)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "snapshots_dir": args.snapshots_dir,
+            "config": asdict(cfg),
+            "summary": result.summary,
+            "trades": result.trades,
+        }, indent=2))
+        print(f"\nTrades written to {out_path} — analyze with "
+              f"`python scripts/calibrate.py {out_path}`")
     return 0
 
 
