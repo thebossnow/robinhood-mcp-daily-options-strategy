@@ -128,7 +128,7 @@ The project follows a gated, data-first approach before any real money exposure.
 8. **Small Issues / Polish**
    - Monitor EM filter (idxmin + configurable multiplier).
    - Harden ATM straddle extraction if edge cases appear.
-   - Token security (rotation, .gitignore for .rh_mcp_token.json).
+   - Token security (rotation; `.rh_mcp_token.json` is already gitignored).
    - Update docs (e.g., PHASE2 for frequent collection + OI analysis).
    - Add more integration tests (MCP + math).
 
@@ -217,7 +217,7 @@ The project follows a gated, data-first approach before any real money exposure.
 - Diverging copies: Consolidated; use home repo only.
 
 ## Next Immediate Actions (Post-Handoff)
-1. Merge/ensure #9 (CI + docs) is on main (if not already).
+1. ✓ Done: CI + docs on main (PR #9 incorporated); cron hardening merged (PR #10 — ET-pinned `crontab.txt` + ±2 min tolerance).
 2. Rebase any feature branches (e.g., mcp-data-provider) onto main if needed.
 3. Run full validation per PHASE2_VALIDATION.md (focus data collection + paper loop).
 4. Monitor cron logs + snapshot growth.
