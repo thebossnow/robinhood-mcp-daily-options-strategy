@@ -34,6 +34,7 @@ import logging
 import re
 import time
 from datetime import datetime, date as date_cls
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -182,6 +183,90 @@ def rows_to_snapshots(rows: list[dict],
     for symbol, day in sorted(skipped_no_spot):
         logger.warning("%s %s: no spot close available — day skipped", symbol, day)
     return snapshots
+
+
+DAY_CHAIN_COLUMNS = ["expiration", "type", "strike", "bid", "ask", "iv", "delta"]
+
+
+class DoltHubHistory:
+    """Whole-day chain fetches for the managed credit backtest.
+
+    The free DoltHub SQL API serves ~10-30s per query and kills range scans
+    with a server-side deadline, so the only sustainable access pattern is
+    one point-date query per (symbol, day): all expirations within max_dte,
+    which both prices new entries and marks every open position at that
+    checkpoint. Results are cached on disk (JSON keyed by SQL hash), so
+    reruns and multi-variant sweeps never re-hit the API; `prefetch` warms
+    the cache concurrently.
+    """
+
+    def __init__(self, client: DoltHubClient | None = None,
+                 cache_dir: str | Path = "data_dolthub_cache"):
+        self.client = client or DoltHubClient()
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cached_query(self, sql: str) -> list[dict]:
+        import hashlib
+        import json as _json
+        key = hashlib.sha1(sql.encode()).hexdigest()
+        path = self.cache_dir / f"{key}.json"
+        if path.exists():
+            return _json.loads(path.read_text())
+        rows = self.client.query_paged(sql)
+        path.write_text(_json.dumps(rows))
+        return rows
+
+    def day_chains(self, symbol: str, day: str, max_dte: int = 50) -> pd.DataFrame:
+        """Every chain row quoted on `day` with expiration within max_dte.
+
+        Columns: DAY_CHAIN_COLUMNS (incl. the dataset's own delta).
+        volume/open_interest are not in this dataset — liquidity is assumed,
+        results are optimistic on fillability (see module docstring).
+        Returns an empty frame for days the dataset doesn't cover.
+        """
+        symbol, day = _check_symbol(symbol), _check_date(day)
+        d = date_cls.fromisoformat(day)
+        hi = date_cls.fromordinal(d.toordinal() + max_dte).isoformat()
+        rows = self._cached_query(
+            "SELECT `expiration`, `call_put`, `strike`, `bid`, `ask`, "
+            "`vol`, `delta` FROM `option_chain` "
+            f"WHERE `act_symbol` = '{symbol}' AND `date` = '{day}' "
+            f"AND `expiration` BETWEEN '{day}' AND '{hi}' "
+            "ORDER BY `expiration`, `call_put`, `strike`"
+        )
+        records = [{
+            "expiration": str(r["expiration"])[:10],
+            "type": str(r["call_put"]).strip().lower(),
+            "strike": float(r["strike"]),
+            "bid": float(r["bid"] or 0),
+            "ask": float(r["ask"] or 0),
+            "iv": float(r["vol"] or 0),
+            "delta": float(r["delta"] or 0),
+        } for r in rows]
+        return pd.DataFrame(records, columns=DAY_CHAIN_COLUMNS)
+
+    def prefetch(self, symbols: list[str], days: list[str], max_dte: int = 50,
+                 workers: int = 4, progress_every: int = 25) -> None:
+        """Warm the cache for (symbol, day) pairs concurrently. Failures on
+        individual days are logged and skipped — the engine treats missing
+        days as dataset gaps."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        jobs = [(s, d) for s in symbols for d in days
+                if _SYMBOL_RE.match(s) and _DATE_RE.match(d)]
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(self.day_chains, s, d, max_dte): (s, d)
+                       for s, d in jobs}
+            for fut in as_completed(futures):
+                s, d = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    logger.warning("prefetch %s %s failed: %s", s, d, exc)
+                done += 1
+                if done % progress_every == 0:
+                    logger.info("prefetch: %d/%d day-chains", done, len(jobs))
 
 
 def build_spot_lookup(symbols: list[str], start: str, end: str) -> dict:

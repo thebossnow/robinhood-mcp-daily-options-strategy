@@ -193,3 +193,43 @@ Read results with these caveats in mind:
   set has real volume/OI and intraday quotes and remains the
   higher-fidelity benchmark. Agreement between the two is the signal that
   matters.
+
+## Credit strategies: put spreads and iron condors (premium selling)
+
+The debit-spread scanner above selects by a model-EV filter that scores the
+market's own prices with the market's own implied vol — a construction that
+can only surface model error, not edge (risk-neutral EV of a fairly priced
+structure is ~0 before costs). The credit-strategy pipeline replaces that
+premise: mechanical premium *selling*, whose edge claim (the variance risk
+premium) is tested against history instead of asserted by a model.
+
+Three variants (`options_trader/signals/credit.py`):
+
+| variant | put side | call side | idea |
+|---|---|---|---|
+| `put_spread` | short ~30Δ + wing | — | bullish lean + VRP |
+| `condor_sym` | short ~20Δ + wing | short ~20Δ + wing | pure range bet |
+| `condor_asym` | short ~20Δ + wing | short ~12Δ + wing | more room on the side bull runs punish |
+
+Shared mechanics: 30–45 DTE entries (closest to 38), wings ~2% of spot,
+weekly entry cadence, managed mechanically — close at 50% of entry credit,
+exit on short-strike breach, hard exit at 21 DTE. No rolling, no
+discretion. Fills pay slippage (half-spread fraction) both ways.
+
+```bash
+python scripts/backtest_credit.py --symbols SPY QQQ IWM XLF XLE \
+    --start 2022-01-03 --end 2026-06-30
+```
+
+The backtest (`options_trader/backtest/managed.py`) replays weekly
+checkpoints against DoltHub EOD chains fetched lazily with an on-disk cache
+(`data_dolthub_cache/`). Additional caveats on top of the DoltHub ones
+above: the dataset quotes only a rotating subset of expirations per day, so
+positions whose expiration is unquoted at a checkpoint are marked with
+Black-Scholes at entry IV — each trade records `mark_source` and the
+summary reports how much of the result rests on model marks. Weekly (not
+daily) management means late profit-takes (pessimistic) and late breach
+exits (also pessimistic for a short-premium book). It is an expectancy
+study, not a portfolio simulation: one contract per position, overlapping
+positions are correlated, and trade counts overstate statistical
+independence.
