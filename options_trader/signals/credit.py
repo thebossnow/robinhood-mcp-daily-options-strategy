@@ -99,6 +99,34 @@ class CreditVariantConfig:
         return asdict(self)
 
 
+# Paper-trading candidates, selected by the 2022-2026 DoltHub sweep
+# (16 configs, in-sample 2022-24 / out-of-sample 2025-26, SPY-only):
+#   spy_condor15: +$8.84/trade, 68.7% win, PF 1.10 over 211 trades
+#   spy_put10:    +$6.01/trade, 81.0% win, PF 1.24 over 211 trades
+# Both were positive in-sample AND out-of-sample, but the magnitudes are
+# statistically indistinguishable from breakeven (t < 1, best-of-16
+# selection bias) — paper trading exists to measure fill quality and
+# daily-management uplift, not to confirm an already-proven edge.
+# min_credit_frac gates are the 5th percentile of measured entry credit
+# fractions, so they reject broken quotes, not normal entries.
+# The breach stop is OFF: it was the sweep's dominant loss driver
+# (46% of trades stopped on touch, all losers, -$160 average).
+VALIDATED: dict[str, CreditVariantConfig] = {
+    "spy_condor15": CreditVariantConfig(
+        name="spy_condor15", short_put_delta=0.15, short_call_delta=0.15,
+        wing_width_frac=0.04, min_credit_frac=0.06, exit_on_breach=False,
+    ),
+    "spy_put10": CreditVariantConfig(
+        name="spy_put10", short_put_delta=0.10, short_call_delta=None,
+        wing_width_frac=0.02, min_credit_frac=0.03, exit_on_breach=False,
+    ),
+}
+# The sweep found every config negative once XLF/XLE were included; the
+# validated universe is deliberately index-only.
+VALIDATED_UNIVERSE = ["SPY"]
+
+# Original playbook-parameter variants, kept for reproducibility of the
+# PR #14 backtest (all three measured negative after costs).
 VARIANTS: dict[str, CreditVariantConfig] = {
     # min_credit_frac 0.15: at a 30-delta short with ~2%-of-spot wings the
     # market pays ~0.15-0.25 of width; the folklore "1/3 of width" is not
@@ -174,20 +202,46 @@ class CreditPosition:
 
     def intrinsic_close_cost(self, settlement_price: float) -> float:
         """Per-share cost to close at expiry settlement (intrinsic values)."""
-        cost = 0.0
-        for leg in self.legs:
-            if leg.type == "call":
-                iv = max(0.0, settlement_price - leg.strike)
-            else:
-                iv = max(0.0, leg.strike - settlement_price)
-            cost += -leg.side * iv
-        return cost
+        return intrinsic_close_cost(
+            [{"type": l.type, "strike": l.strike, "side": l.side}
+             for l in self.legs],
+            settlement_price,
+        )
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["short_put_strike"] = self.short_put_strike
         d["short_call_strike"] = self.short_call_strike
         return d
+
+
+def intrinsic_close_cost(legs: list[dict], settlement_price: float) -> float:
+    """Per-share cost to close a credit position at expiry settlement.
+    Works from plain leg dicts (type/strike/side) so the journal can settle
+    positions reconstructed from legs_json."""
+    cost = 0.0
+    for leg in legs:
+        if leg["type"] == "call":
+            iv = max(0.0, settlement_price - leg["strike"])
+        else:
+            iv = max(0.0, leg["strike"] - settlement_price)
+        cost += -leg["side"] * iv
+    return cost
+
+
+def leg_passes_live_liquidity(row: pd.Series, min_open_interest: int = 100,
+                              max_spread_pct: float = 0.10,
+                              min_spread_abs: float = 0.05) -> bool:
+    """Liquidity gate for LIVE chains (which, unlike DoltHub EOD data, carry
+    volume/open_interest). The backtest assumed liquidity; the paper phase
+    enforces it: real bid, minimum open interest, and a bid/ask spread no
+    wider than max(min_spread_abs, max_spread_pct * mid)."""
+    if row["bid"] <= 0 or row["ask"] <= 0 or row["ask"] < row["bid"]:
+        return False
+    if row.get("open_interest", 0) < min_open_interest:
+        return False
+    mid = (row["bid"] + row["ask"]) / 2.0
+    return (row["ask"] - row["bid"]) <= max(min_spread_abs, max_spread_pct * mid)
 
 
 def _usable_quote(row: pd.Series) -> bool:

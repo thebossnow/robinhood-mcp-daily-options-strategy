@@ -259,7 +259,47 @@ per contract, profit factor ≈ 0.4, win rates 33–38%). Decomposition:
 Read this the way the repo reads "NO QUALIFYING TRADE": a valid, useful
 outcome. The mechanics most often quoted in retail playbooks did not
 survive contact with 4.5 years of data on these underlyings under this
-fill model. Untested levers that could change the picture (candidates for
-the autoresearch loop, with out-of-sample gates): an IV-rank entry filter,
-index-only universes, wider wings, lower deltas, and profit-take-only
-management without breach stops.
+fill model.
+
+### Validated variants and the sweep that produced them
+
+A 16-config sweep (deltas 10–30, wings 2%/4%, breach on/off; fit on
+2022–24, validated out-of-sample 2025–26) measured each lever:
+farther-OTM shorts help monotonically, removing the breach stop helps
+everywhere, SPY-only is the biggest lever (~+$40/trade vs including
+XLF/XLE), and an IV-rank ≥ 50 entry filter — the playbook's favorite —
+made results sharply worse (high-IV weeks cluster with the trends that
+breach condors). Two configs survived both halves, shipped as
+`VALIDATED` in `signals/credit.py`:
+
+| variant | structure | 2022–26 SPY backtest |
+|---|---|---|
+| `spy_condor15` | 15Δ condor, 4% wings, no breach stop | +$5.9/trade, 68% win, PF 1.06 |
+| `spy_put10` | 10Δ put spread, 2% wing, no breach stop | +$5.5/trade, 81% win, PF 1.21 |
+
+Those magnitudes are statistically indistinguishable from breakeven
+(t < 1, and best-of-16 selection bias applies) — which is exactly why the
+next gate is live paper trading, not live money.
+
+### Paper trading the validated variants
+
+```bash
+python scripts/scan_credit.py --provider mcp          # entries, Mondays
+python scripts/manage_credit.py --provider mcp        # daily management
+python scripts/backtest_credit.py --start ... --end ...   # validated set by default
+```
+
+Cron (in `crontab.txt`): entries Mondays 10:30 ET, management daily
+15:45 ET. Entries journal every skip as NO QUALIFYING TRADE; management
+applies 50% profit-take (daily — the fidelity upgrade over the weekly
+backtest), a time exit at min(21 DTE, half entry DTE), and settlement.
+The journal gained additive `strategy`/`legs_json` columns; existing
+vertical rows and code are untouched.
+
+**Sizing:** `configs/credit_paper.json` runs a NOTIONAL $50k account —
+the validated structures risk ~$1.2–2.4k per contract, which no $5k
+account can carry (options: XSP at 1/10th scale, or more capital; that
+decision is deliberately deferred). The paper phase measures what 26
+trades/config/6-months actually can: realized slippage vs the 0.5×
+half-spread assumption, daily-vs-weekly management uplift, and
+no-disaster confirmation — not statistical proof of a +$6/trade edge.

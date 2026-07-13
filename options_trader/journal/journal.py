@@ -35,9 +35,18 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_value REAL,                    -- per share credit received at exit
     realized_pnl REAL,                  -- total dollars
     closed_at TEXT,
-    notes TEXT
+    notes TEXT,
+    strategy TEXT NOT NULL DEFAULT 'vertical',  -- vertical | credit
+    legs_json TEXT                      -- credit positions: all legs
 );
 """
+
+# Additive migrations for databases created before a column existed. Applied
+# via ALTER TABLE on open, so an old journal.db keeps working untouched.
+MIGRATION_COLUMNS = {
+    "strategy": "TEXT NOT NULL DEFAULT 'vertical'",
+    "legs_json": "TEXT",
+}
 
 
 @dataclass
@@ -61,6 +70,8 @@ class TradeRecord:
     realized_pnl: float | None
     closed_at: str | None
     notes: str | None
+    strategy: str = "vertical"
+    legs_json: str | None = None
 
 
 class Journal:
@@ -69,7 +80,15 @@ class Journal:
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(trades)")}
+        for name, decl in MIGRATION_COLUMNS.items():
+            if name not in cols:
+                self._conn.execute(
+                    f"ALTER TABLE trades ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -105,6 +124,52 @@ class Journal:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    def record_credit_entry(self, position: dict, contracts: int,
+                            notes: str = "") -> int:
+        """Record a premium-selling position (put credit spread or iron
+        condor) built by signals/credit.py. `position` is
+        CreditPosition.to_dict(): entry_debit stores the per-share CREDIT
+        received (after slippage); record_exit flips the P&L sign for
+        strategy='credit' rows."""
+        legs = position["legs"]
+        widths: dict[str, float] = {}
+        for opt_type in ("put", "call"):
+            ks = [l["strike"] for l in legs if l["type"] == opt_type]
+            if len(ks) == 2:
+                widths[opt_type] = abs(ks[0] - ks[1])
+        max_width = max(widths.values())
+        credit = position["credit"]
+        # Legacy strike columns carry the put side (call side for call-only
+        # structures) so old queries stay meaningful; legs_json is canonical.
+        side = "put" if "put" in widths else "call"
+        side_legs = {l["side"]: l for l in legs if l["type"] == side}
+        cur = self._conn.execute(
+            """INSERT INTO trades
+               (opened_at, underlying, expiration, kind, long_strike,
+                short_strike, width, contracts, entry_debit, max_loss,
+                max_profit, candidate_json, notes, strategy, legs_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                position["underlying"],
+                position["expiration"],
+                position["variant"],
+                side_legs[1]["strike"],
+                side_legs[-1]["strike"],
+                max_width,
+                contracts,
+                credit,
+                (max_width - credit) * 100.0 * contracts,
+                credit * 100.0 * contracts,
+                json.dumps(position),
+                notes,
+                "credit",
+                json.dumps(legs),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
     def record_exit(self, trade_id: int, exit_value: float,
                     status: str = "closed", notes: str = "") -> TradeRecord:
         row = self._get_row(trade_id)
@@ -112,7 +177,12 @@ class Journal:
             raise KeyError(f"No trade with id {trade_id}")
         if row["status"] != "open":
             raise ValueError(f"Trade {trade_id} is already {row['status']}")
-        pnl = (exit_value - row["entry_debit"]) * 100.0 * row["contracts"]
+        if row["strategy"] == "credit":
+            # entry_debit holds the credit received; exit_value is the cost
+            # paid to close (or intrinsic at settlement).
+            pnl = (row["entry_debit"] - exit_value) * 100.0 * row["contracts"]
+        else:
+            pnl = (exit_value - row["entry_debit"]) * 100.0 * row["contracts"]
         self._conn.execute(
             """UPDATE trades SET status=?, exit_value=?, realized_pnl=?,
                closed_at=?, notes=COALESCE(NULLIF(notes,'') || ' | ', '') || ?
@@ -141,6 +211,20 @@ class Journal:
             "SELECT * FROM trades WHERE status='open' ORDER BY opened_at"
         ).fetchall()
         return [_to_record(r) for r in rows]
+
+    def open_credit_positions(self) -> list[TradeRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status='open' AND strategy='credit' "
+            "ORDER BY opened_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
+    def candidate(self, trade_id: int) -> dict | None:
+        """The full entry-time candidate/position snapshot, if recorded."""
+        row = self._get_row(trade_id)
+        if row is None or not row["candidate_json"]:
+            return None
+        return json.loads(row["candidate_json"])
 
     def open_risk(self) -> float:
         """Total max loss currently at risk across open positions."""

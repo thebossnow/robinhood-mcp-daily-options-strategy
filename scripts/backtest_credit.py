@@ -28,17 +28,22 @@ from options_trader.backtest.managed import (
     ManagedBacktestEngine, weekly_entry_days,
 )
 from options_trader.data.dolthub import DoltHubHistory, build_spot_lookup
-from options_trader.signals.credit import VARIANTS
+from options_trader.signals.credit import VALIDATED, VALIDATED_UNIVERSE, VARIANTS
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--symbols", nargs="+",
-                    default=["SPY", "QQQ", "IWM", "XLF", "XLE"])
+    ap.add_argument("--symbols", nargs="+", default=None,
+                    help="Default: SPY for validated, SPY XLF XLE for legacy "
+                         "(the DoltHub dataset has no QQQ/IWM)")
     ap.add_argument("--start", required=True, help="YYYY-MM-DD")
     ap.add_argument("--end", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--variants", nargs="+", default=list(VARIANTS),
-                    choices=list(VARIANTS))
+    ap.add_argument("--variant-set", choices=["validated", "legacy"],
+                    default="validated",
+                    help="validated = the paper-trading candidates; "
+                         "legacy = the original playbook parameters")
+    ap.add_argument("--variants", nargs="+", default=None,
+                    choices=list(VARIANTS) + list(VALIDATED))
     ap.add_argument("--cache-dir", default="data_dolthub_cache")
     ap.add_argument("--out-dir", default="runs")
     ap.add_argument("--workers", type=int, default=4,
@@ -48,7 +53,13 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
 
-    variants = [VARIANTS[name] for name in args.variants]
+    pool = VALIDATED if args.variant_set == "validated" else VARIANTS
+    names = args.variants or list(pool)
+    variants = [(VALIDATED | VARIANTS)[name] for name in names]
+    if args.symbols is None:
+        args.symbols = (list(VALIDATED_UNIVERSE)
+                        if args.variant_set == "validated"
+                        else ["SPY", "XLF", "XLE"])
     history = DoltHubHistory(cache_dir=args.cache_dir)
     print(f"Building spot lookup from yfinance: {args.symbols} "
           f"{args.start}..{args.end}")
