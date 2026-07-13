@@ -193,3 +193,113 @@ Read results with these caveats in mind:
   set has real volume/OI and intraday quotes and remains the
   higher-fidelity benchmark. Agreement between the two is the signal that
   matters.
+
+## Credit strategies: put spreads and iron condors (premium selling)
+
+The debit-spread scanner above selects by a model-EV filter that scores the
+market's own prices with the market's own implied vol — a construction that
+can only surface model error, not edge (risk-neutral EV of a fairly priced
+structure is ~0 before costs). The credit-strategy pipeline replaces that
+premise: mechanical premium *selling*, whose edge claim (the variance risk
+premium) is tested against history instead of asserted by a model.
+
+Three variants (`options_trader/signals/credit.py`):
+
+| variant | put side | call side | idea |
+|---|---|---|---|
+| `put_spread` | short ~30Δ + wing | — | bullish lean + VRP |
+| `condor_sym` | short ~20Δ + wing | short ~20Δ + wing | pure range bet |
+| `condor_asym` | short ~20Δ + wing | short ~12Δ + wing | more room on the side bull runs punish |
+
+Shared mechanics: 25–50 DTE entries targeting 45 (the classic 30–45 window
+falls between this dataset's rotating ~{11–16, 25–32, 46} DTE quote
+buckets), wings ~2% of spot, weekly entry cadence, managed mechanically —
+close at 50% of entry credit, exit on short-strike breach, time exit at
+min(21 DTE, half the entry DTE). No rolling, no discretion. Fills pay
+slippage (half-spread fraction) both ways.
+
+```bash
+python scripts/backtest_credit.py --symbols SPY QQQ IWM XLF XLE \
+    --start 2022-01-03 --end 2026-06-30
+```
+
+The backtest (`options_trader/backtest/managed.py`) replays weekly
+checkpoints against DoltHub EOD chains fetched lazily with an on-disk cache
+(`data_dolthub_cache/`). Additional caveats on top of the DoltHub ones
+above: the dataset quotes only a rotating subset of expirations per day, so
+positions whose expiration is unquoted at a checkpoint are marked with
+Black-Scholes at entry IV — each trade records `mark_source` and the
+summary reports how much of the result rests on model marks. Weekly (not
+daily) management means late profit-takes (pessimistic) and late breach
+exits (also pessimistic for a short-premium book). It is an expectancy
+study, not a portfolio simulation: one contract per position, overlapping
+positions are correlated, and trade counts overstate statistical
+independence.
+
+### First results (2022-01-03 → 2026-06-30, SPY/XLF/XLE): no edge found
+
+The dataset does not cover QQQ or IWM (verified directly — it has DIA,
+SPY, XLE, XLF among liquid ETFs), so the run is SPY/XLF/XLE, 976 trades.
+All three variants were **negative after costs** (expectancy −$47 to −$62
+per contract, profit factor ≈ 0.4, win rates 33–38%). Decomposition:
+
+- **Breach exits are the dominant cost**: 46% of trades stopped out on a
+  short-strike touch, all losers, −$160 average. Touch probability at
+  these deltas is ~2× the expiry ITM probability, so stop-on-touch
+  converts a majority-winner structure into a majority-loser one. With
+  breach exits off, expectancy improves to ≈ −$39/trade — still negative.
+- **Pre-cost, the strategy is ≈ breakeven only on SPY** (condor_sym
+  −$1.5/trade with zero slippage); XLF is mildly negative; XLE is ruinous
+  (condor win rate 2% — the 2022 energy trend walked straight through the
+  "rangebound" range). Slippage adds ~$10–25/trade of drag.
+- 78% of exits are model-marked (see `mark_source`), so treat magnitudes
+  as approximate; the sign and the breach-exit decomposition are robust
+  across the marks-only subset.
+
+Read this the way the repo reads "NO QUALIFYING TRADE": a valid, useful
+outcome. The mechanics most often quoted in retail playbooks did not
+survive contact with 4.5 years of data on these underlyings under this
+fill model.
+
+### Validated variants and the sweep that produced them
+
+A 16-config sweep (deltas 10–30, wings 2%/4%, breach on/off; fit on
+2022–24, validated out-of-sample 2025–26) measured each lever:
+farther-OTM shorts help monotonically, removing the breach stop helps
+everywhere, SPY-only is the biggest lever (~+$40/trade vs including
+XLF/XLE), and an IV-rank ≥ 50 entry filter — the playbook's favorite —
+made results sharply worse (high-IV weeks cluster with the trends that
+breach condors). Two configs survived both halves, shipped as
+`VALIDATED` in `signals/credit.py`:
+
+| variant | structure | 2022–26 SPY backtest |
+|---|---|---|
+| `spy_condor15` | 15Δ condor, 4% wings, no breach stop | +$5.9/trade, 68% win, PF 1.06 |
+| `spy_put10` | 10Δ put spread, 2% wing, no breach stop | +$5.5/trade, 81% win, PF 1.21 |
+
+Those magnitudes are statistically indistinguishable from breakeven
+(t < 1, and best-of-16 selection bias applies) — which is exactly why the
+next gate is live paper trading, not live money.
+
+### Paper trading the validated variants
+
+```bash
+python scripts/scan_credit.py --provider mcp          # entries, Mondays
+python scripts/manage_credit.py --provider mcp        # daily management
+python scripts/backtest_credit.py --start ... --end ...   # validated set by default
+```
+
+Cron (in `crontab.txt`): entries Mondays 10:30 ET, management daily
+15:45 ET. Entries journal every skip as NO QUALIFYING TRADE; management
+applies 50% profit-take (daily — the fidelity upgrade over the weekly
+backtest), a time exit at min(21 DTE, half entry DTE), and settlement.
+The journal gained additive `strategy`/`legs_json` columns; existing
+vertical rows and code are untouched.
+
+**Sizing:** `configs/credit_paper.json` runs a NOTIONAL $50k account —
+the validated structures risk ~$1.2–2.4k per contract, which no $5k
+account can carry (options: XSP at 1/10th scale, or more capital; that
+decision is deliberately deferred). The paper phase measures what 26
+trades/config/6-months actually can: realized slippage vs the 0.5×
+half-spread assumption, daily-vs-weekly management uplift, and
+no-disaster confirmation — not statistical proof of a +$6/trade edge.

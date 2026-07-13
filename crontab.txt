@@ -11,3 +11,10 @@
 # The script matches exact ET slots (9:00,9:45,...,16:30) within a 2-min tolerance.
 CRON_TZ=America/New_York
 */15 9-16 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/collect_data.sh
+
+# Credit-strategy PAPER trading (validated variants, notional $50k account —
+# see configs/credit_paper.json; not sized for real money):
+# entries Mondays 10:30 ET, management daily 15:45 ET (liquid quotes,
+# before the close auction).
+30 10 * * 1 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_entry.sh
+45 15 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_manage.sh
