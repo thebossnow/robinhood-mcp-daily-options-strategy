@@ -5,16 +5,21 @@
 #
 # NOTE: the job path below is absolute; adjust it if the repo lives elsewhere.
 #
-# Cron for data collection: run the wrapper every 15 min Mon-Fri during the ET
-# market window. CRON_TZ pins scheduling to Eastern regardless of system TZ, so
-# the schedule stays correct even if the machine's timezone changes.
-# The script matches exact ET slots (9:00,9:45,...,16:30) within a 2-min tolerance.
-CRON_TZ=America/New_York
-*/15 9-16 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/collect_data.sh
+# TIMEZONE: this machine runs Ubuntu's vixie cron, which does NOT support
+# CRON_TZ (a cronie extension) — it schedules in the system timezone
+# (America/Los_Angeles). All times below are therefore PACIFIC, converted
+# from the intended Eastern schedule. US Pacific and Eastern shift for DST
+# on the same dates, so the 3-hour offset holds year-round. If the machine's
+# timezone ever changes, these times must be re-converted.
+#
+# Data collection: intended ET window is 9:00-16:30 in 15-min slots
+# (= 6:00-13:30 PT). The wrapper matches exact ET slots within a 2-min
+# tolerance, so extra firings degrade to no-ops.
+*/15 6-13 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/collect_data.sh
 
 # Credit-strategy PAPER trading (validated variants, notional $50k account —
 # see configs/credit_paper.json; not sized for real money):
-# entries Mondays 10:30 ET, management daily 15:45 ET (liquid quotes,
-# before the close auction).
-30 10 * * 1 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_entry.sh
-45 15 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_manage.sh
+# entries Mondays 10:30 ET (= 7:30 PT), management daily 15:45 ET
+# (= 12:45 PT — liquid quotes, before the close auction).
+30 7 * * 1 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_entry.sh
+45 12 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_manage.sh
