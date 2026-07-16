@@ -90,6 +90,7 @@ class BacktestEngine:
                         "exit_value": round(exit_value, 4),
                         "pnl": round(pnl, 2),
                         "p_win_at_entry": cand.p_win,
+                        "p_loss_at_entry": cand.p_loss,
                         "ev_after_costs_at_entry": cand.ev_after_costs,
                     }
                 )
