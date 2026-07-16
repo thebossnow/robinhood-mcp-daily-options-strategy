@@ -23,6 +23,7 @@ This document serves as a complete handoff for the ongoing development of the AI
   - `PHASE2_VALIDATION.md` guide.
   - DoltHub EOD option-chain importer (`options_trader/data/dolthub.py`, `scripts/import_dolthub.py`, `configs/dolthub_backtest.json`) for historical backtesting from external EOD data.
   - Karpathy autoresearch loop (`loop/evaluate.py`, `loop/run_loop.py`, `loop/program.md`): stability scoring, decay checks, multi-variant generation, OOS gates.
+  - Calibration study (`options_trader/backtest/calibration.py`, `scripts/calibrate.py`, `backtest.py --save-trades`): reliability of p_win/p_loss and predicted-EV-vs-realized-P&L over settled trades — prerequisite gate before any edge-proportional sizing (Kelly) work.
 - Data: 44+ snapshots (including multi-per-day from 2026-07-08), runs/ logs.
 - Cron active: `CRON_TZ=America/New_York` + `*/15 9-16 * * 1-5` (ET-pinned, version-controlled in `crontab.txt`); the script matches ET slots (9:00, 9:45, ..., 16:30) within a ±2 min tolerance and runs `--data-only --save-snapshot --provider mcp`.
 - No open PRs with overlaps (clean PR #9 for CI+docs merged/ incorporated; old PRs closed/superseded).
@@ -191,7 +192,8 @@ The project follows a gated, data-first approach before any real money exposure.
 
 ## Key Code Areas & Reuse
 - **Data Collection:** `scripts/scan.py` (core + --data-only), `options_trader/data/provider.py` (SnapshotStore with time fix), `scripts/collect_data.sh` (cron wrapper + ET slot matching w/ ±2 min tolerance), `crontab.txt` (version-controlled ET-pinned schedule).
-- **Backtesting:** `scripts/backtest.py`, `options_trader/backtest/engine.py` (per-snapshot independent, uses taken_at).
+- **Backtesting:** `scripts/backtest.py`, `options_trader/backtest/engine.py` (per-snapshot independent, uses taken_at); `--save-trades` persists settled trades for analysis.
+- **Calibration:** `options_trader/backtest/calibration.py`, `scripts/calibrate.py` — checks whether p_win/p_loss and ev_after_costs predict settled outcomes (reliability + Brier skill + EV→P&L slope) before any allocator consumes them.
 - **Historical Data (DoltHub):** `options_trader/data/dolthub.py`, `scripts/import_dolthub.py`, `configs/dolthub_backtest.json` — imports EOD option chains for backtesting beyond live-collected snapshots.
 - **Autoresearch Loop:** `loop/run_loop.py`, `loop/evaluate.py`, `loop/program.md` — stability scoring, decay checks, multi-variant generation, OOS gates.
 - **Strategy Core:** `options_trader/config.py` (DTE, liquidity, premium, em_filter_multiplier, risk limits), `options_trader/signals/` (candidates.py with EM, math.py ported, probability.py).
