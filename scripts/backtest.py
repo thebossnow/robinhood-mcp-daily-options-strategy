@@ -12,6 +12,7 @@ are reported as skipped, never guessed.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,6 +28,9 @@ def main() -> int:
     ap.add_argument("--config", help="Path to StrategyConfig JSON")
     ap.add_argument("--snapshots-dir", default="data_snapshots")
     ap.add_argument("--per-snapshot-trades", type=int, default=1)
+    ap.add_argument("--settlements", help="JSON file of settlement closes "
+                    "keyed 'TICKER|YYYY-MM-DD' (written by import scripts); "
+                    "falls back to yfinance lookups when omitted")
     args = ap.parse_args()
 
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
@@ -37,15 +41,32 @@ def main() -> int:
         return 1
     print(f"Loaded {len(snaps)} snapshots.")
 
-    provider = YFinanceProvider()
     settlements: dict[tuple[str, str], float] = {}
-    for snap in snaps:
-        key = (snap.underlying, snap.expiration)
-        if key in settlements:
-            continue
-        px = provider.get_settlement_close(snap.underlying, snap.expiration)
-        if px is not None:
-            settlements[key] = px
+    if args.settlements:
+        raw = json.loads(Path(args.settlements).read_text())
+        settlements = {
+            tuple(k.split("|", 1)): float(v) for k, v in raw.items()
+        }
+        print(f"Loaded {len(settlements)} settlement closes from {args.settlements}")
+    else:
+        # Default snapshots dir often sits next to an import-generated
+        # settlements file; use it automatically when present.
+        default_file = Path(args.snapshots_dir) / "settlements.json"
+        if default_file.exists():
+            raw = json.loads(default_file.read_text())
+            settlements = {
+                tuple(k.split("|", 1)): float(v) for k, v in raw.items()
+            }
+            print(f"Loaded {len(settlements)} settlement closes from {default_file}")
+        else:
+            provider = YFinanceProvider()
+            for snap in snaps:
+                key = (snap.underlying, snap.expiration)
+                if key in settlements:
+                    continue
+                px = provider.get_settlement_close(snap.underlying, snap.expiration)
+                if px is not None:
+                    settlements[key] = px
 
     result = BacktestEngine(cfg).run(
         snaps, settlements, per_snapshot_trades=args.per_snapshot_trades

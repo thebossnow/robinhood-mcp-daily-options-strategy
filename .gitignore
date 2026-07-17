@@ -6,3 +6,5 @@ data_snapshots/
 .pytest_cache/
 .rh_mcp_token.json
 data_snapshots_dolthub/
+data_snapshots_parquet/
+parquet_cache/

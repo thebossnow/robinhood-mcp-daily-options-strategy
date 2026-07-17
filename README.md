@@ -162,7 +162,27 @@ Non-negotiable properties, enforced in code rather than prose:
 - **Human merge.** An accepted variant becomes a pull request for review.
   Nothing the loop produces merges automatically.
 
-## DoltHub historical backtest (free EOD data)
+## Historical backtest — fastest path (free EOD parquet)
+
+The [philippdubach/options-data](https://github.com/philippdubach/options-data)
+dataset provides free EOD option chains for 100+ US equities/ETFs
+(2008–2025) as one parquet per ticker, **including volume, open interest,
+and implied volatility** — so the standard config and full liquidity filter
+apply unchanged. Two commands to a multi-year backtest:
+
+```bash
+python scripts/import_parquet.py --tickers SPY QQQ IWM \
+    --start 2024-01-01 --end 2026-06-30
+python scripts/backtest.py --snapshots-dir data_snapshots_parquet
+```
+
+The importer also writes `settlements.json` from the dataset's own
+underlying closes, so the backtest needs no network at all. Caveats: EOD
+snapshots only (hold-to-expiry evaluation), community-sourced data
+(spot-check a few chains against a broker), educational/research use per
+the dataset's terms.
+
+## DoltHub historical backtest (alternate free source)
 
 The free [post-no-preference/options](https://www.dolthub.com/repositories/post-no-preference/options)
 DoltHub database has end-of-day US equity option chains back to ~2019.
