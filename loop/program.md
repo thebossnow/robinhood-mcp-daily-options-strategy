@@ -58,6 +58,32 @@ expectancy already contains):
   in-sample improvement margin (multiple-comparisons guard). The OOS set is
   a finite resource; after ~10 attempts, stop and collect more data instead
   of continuing to mine.
+- **OOS calibration pairing:** once a candidate has ≥ 40 OOS settled trades,
+  its predicted `ev_after_costs` must have a positive OLS slope against its
+  own OOS P&L (`options_trader/backtest/calibration.py::ev_calibration`,
+  wired into `decide()`). Beating baseline on average isn't enough if the
+  "edge" doesn't track realized outcomes — that's a model artifact, not a
+  signal improvement.
+
+## Live anchor (beyond backtest data)
+
+The verifier above only ever sees backtest replay. Two more pieces close the
+loop against what actually happens in the account, i.e. the "real fills"
+anchor that no backtest can substitute for:
+
+- `scripts/calibrate_live.py` — reports predicted EV vs. realized P&L over
+  the journal's *closed* trades (paper or live), optionally diffed against a
+  backtest's predicted expectancy (`--backtest-trades`). Run it by hand
+  whenever you want the honest number: is the backtest's edge showing up in
+  real fills?
+- `loop/audit_live.py` — the slow loop watching the fast one. Run
+  periodically (weekly); if live EV-calibration slope collapses (≤ 0) or
+  mean realized P&L turns non-positive over ≥ 40 live trades, it writes
+  `loop/live_halt.json` and every `RiskManager.check()` call refuses new
+  entries until a human runs `--clear` after reviewing why. This is separate
+  from the consecutive-loss kill switch: that catches a losing streak, this
+  catches the model's predictions quietly decoupling from reality while the
+  streak still looks fine.
 
 ## Process
 
