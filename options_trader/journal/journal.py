@@ -219,6 +219,15 @@ class Journal:
         ).fetchall()
         return [_to_record(r) for r in rows]
 
+    def closed_trades(self) -> list[TradeRecord]:
+        """All settled (closed or expired) trades, oldest first — the real-
+        fills record the graph's live calibration anchors against."""
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status IN ('closed','expired') "
+            "ORDER BY closed_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
     def candidate(self, trade_id: int) -> dict | None:
         """The full entry-time candidate/position snapshot, if recorded."""
         row = self._get_row(trade_id)

@@ -9,7 +9,10 @@ snapshots, under the statistical discipline described in loop/program.md:
 - intraday snapshots deduplicated to one per day per underlying/expiration,
 - walk-forward split: most recent scan days held out,
 - in-sample improvement with an escalating margin per prior attempt,
-- out-of-sample must be positive and must not regress.
+- out-of-sample must be positive and must not regress,
+- out-of-sample EV-calibration slope must stay positive when there's enough
+  OOS sample to judge it (pairing check: a candidate's predicted edge must
+  itself track its own held-out P&L, not just beat baseline on average).
 
 Run standalone for a dry-run report on the current config and dataset:
 
@@ -25,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.backtest import BacktestEngine
+from options_trader.backtest.calibration import MIN_TRADES_FOR_VERDICT, ev_calibration
 from options_trader.config import StrategyConfig
 from options_trader.data import SnapshotStore
 from options_trader.data.provider import ChainSnapshot
@@ -118,9 +122,17 @@ class Verdict:
 
 def decide(candidate_train: dict, baseline_train: dict,
            candidate_oos: dict, baseline_oos: dict,
-           attempts: int, max_dd_limit: float) -> Verdict:
+           attempts: int, max_dd_limit: float,
+           candidate_oos_trades: list[dict] | None = None) -> Verdict:
     """Pure decision logic over backtest summaries (BacktestResult.summary
-    dicts). max_dd_limit is a negative dollar amount."""
+    dicts). max_dd_limit is a negative dollar amount.
+
+    candidate_oos_trades, if given the candidate's OOS BacktestResult.trades,
+    adds a pairing check: does the candidate's predicted ev_after_costs
+    actually track its own OOS realized P&L (options_trader/backtest/
+    calibration.py's ev_calibration)? An expectancy "improvement" that
+    doesn't cash on held-out data is a model artifact, not real edge — this
+    catches it even when the raw expectancy numbers above look fine."""
     reasons: list[str] = []
 
     n = candidate_train.get("trades", 0)
@@ -163,6 +175,18 @@ def decide(candidate_train: dict, baseline_train: dict,
                 f"out-of-sample regression: {c_oos:.2f} < baseline {b_oos:.2f}"
             )
 
+    oos_calibration = None
+    if candidate_oos_trades and len(candidate_oos_trades) >= MIN_TRADES_FOR_VERDICT:
+        oos_calibration = ev_calibration(candidate_oos_trades)
+        slope = oos_calibration["ols_slope"]
+        if slope is not None and slope <= 0:
+            reasons.append(
+                f"OOS EV-calibration slope {slope} <= 0 — predicted "
+                "ev_after_costs does not track this candidate's own "
+                "out-of-sample P&L (pairing check: improvement looks like a "
+                "model artifact, not real edge)"
+            )
+
     return Verdict(
         accepted=not reasons,
         reasons=reasons,
@@ -171,6 +195,7 @@ def decide(candidate_train: dict, baseline_train: dict,
             "out_of_sample": {"candidate": candidate_oos, "baseline": baseline_oos},
             "required_margin": margin,
             "max_dd_limit": max_dd_limit,
+            "oos_calibration": oos_calibration,
         },
     )
 
@@ -194,13 +219,16 @@ def evaluate(candidate_cfg: StrategyConfig, baseline_cfg: StrategyConfig,
     # Drawdown limit is anchored to the FROZEN baseline risk config —
     # 4 daily-loss-limits of pain in a backtest is where we stop listening.
     max_dd_limit = -4.0 * baseline_cfg.daily_loss_limit
+    dd_oos = dedupe_daily(oos)
+    candidate_oos_result = BacktestEngine(candidate_cfg).run(dd_oos, settlements)
     return decide(
         candidate_train=collect_metrics(candidate_cfg, train, settlements),
         baseline_train=collect_metrics(baseline_cfg, train, settlements),
-        candidate_oos=collect_metrics(candidate_cfg, oos, settlements),
+        candidate_oos=candidate_oos_result.summary,
         baseline_oos=collect_metrics(baseline_cfg, oos, settlements),
         attempts=attempts,
         max_dd_limit=max_dd_limit,
+        candidate_oos_trades=candidate_oos_result.trades,
     )
 
 
