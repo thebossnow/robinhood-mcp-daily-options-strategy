@@ -31,9 +31,20 @@ LIVE_HALT_PATH = Path("loop/live_halt.json")
 
 def closed_trades_with_predicted_ev(records: list[TradeRecord]) -> list[dict]:
     """TradeRecord list -> ev_calibration()-shaped dicts, entries that
-    actually recorded a prediction only."""
+    actually recorded a prediction only.
+
+    `ev_after_costs` is stored per contract at entry (see
+    Journal.record_entry), but `realized_pnl` is the total dollars for the
+    whole position (entry_debit/exit_value delta * 100 * contracts). Feeding
+    those straight into ev_calibration() would measure position size rather
+    than model calibration for any trade with contracts != 1, so realized
+    P&L is normalized back to per-contract dollars here to match.
+    """
     return [
-        {"ev_after_costs_at_entry": r.ev_after_costs, "pnl": r.realized_pnl}
+        {
+            "ev_after_costs_at_entry": r.ev_after_costs,
+            "pnl": r.realized_pnl / r.contracts,
+        }
         for r in records
         if r.ev_after_costs is not None and r.realized_pnl is not None
     ]

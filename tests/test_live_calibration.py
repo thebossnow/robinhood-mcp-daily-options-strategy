@@ -25,8 +25,8 @@ def _candidate(p_win=0.35, ev=10.0):
     }
 
 
-def _close(journal, entry_debit, exit_value, ev=10.0):
-    tid = journal.record_entry(_candidate(ev=ev), 1, entry_debit=entry_debit)
+def _close(journal, entry_debit, exit_value, ev=10.0, contracts=1):
+    tid = journal.record_entry(_candidate(ev=ev), contracts, entry_debit=entry_debit)
     return journal.record_exit(tid, exit_value=exit_value)
 
 
@@ -48,6 +48,16 @@ class TestClosedTradesWithPredictedEv:
         trades = closed_trades_with_predicted_ev(journal.closed_trades())
         assert len(trades) == 1
         assert trades[0]["ev_after_costs_at_entry"] == 10.0
+        assert trades[0]["pnl"] == pytest.approx(60.0)
+
+    def test_normalizes_realized_pnl_to_per_contract(self, journal):
+        # ev_after_costs is recorded per contract; realized_pnl is stored for
+        # the whole position. A 3-contract trade earning $60/contract should
+        # report pnl == 60, not 180, so it's comparable to the per-contract
+        # predicted EV.
+        _close(journal, 0.60, 1.20, ev=10.0, contracts=3)
+        trades = closed_trades_with_predicted_ev(journal.closed_trades())
+        assert len(trades) == 1
         assert trades[0]["pnl"] == pytest.approx(60.0)
 
 
