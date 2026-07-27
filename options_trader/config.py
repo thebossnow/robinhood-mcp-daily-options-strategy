@@ -49,6 +49,12 @@ class StrategyConfig:
     slippage_half_spread_frac: float = 0.5
     risk_free_rate: float = 0.0
 
+    # --- Position management ---
+    # Close when realized profit >= this fraction of max_profit. 0.75 means
+    # exit once we've captured 75% of the spread's max gain. Set to 1.0 to
+    # disable (hold to expiry). Applies to paper status alerts and backtest.
+    take_profit_pct: float = 0.75
+
     # --- Risk limits (enforced in code; the agent cannot override them) ---
     account_equity: float = 5000.0
     max_risk_per_trade_pct: float = 0.01    # 1% of equity max loss per trade
