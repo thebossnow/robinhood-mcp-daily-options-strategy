@@ -155,3 +155,38 @@ class TestDecision:
                    attempts=0, max_dd_limit=self.LIMIT)
         assert isinstance(v, Verdict)
         assert v.details["required_margin"] == pytest.approx(1.0)
+
+
+def _oos_trade(ev: float, pnl: float) -> dict:
+    return {"ev_after_costs_at_entry": ev, "pnl": pnl}
+
+
+class TestOosCalibrationPairing:
+    ARGS = (_metrics(exp=15.0), _metrics(exp=10.0),
+            _metrics(exp=12.0), _metrics(exp=9.0))
+    LIMIT = -400.0
+
+    def test_below_min_trades_skips_calibration_check(self):
+        # 39 trades: one short of the 40-trade calibration verdict threshold.
+        trades = [_oos_trade(float(i), -50.0) for i in range(39)]
+        v = decide(*self.ARGS, attempts=0, max_dd_limit=self.LIMIT,
+                   candidate_oos_trades=trades)
+        assert v.accepted
+        assert v.details["oos_calibration"] is None
+
+    def test_rejects_when_predicted_edge_does_not_track_realized_pnl(self):
+        # ev climbs, realized pnl is flat and negative -> slope 0, no signal.
+        trades = [_oos_trade(float(i), -50.0) for i in range(45)]
+        v = decide(*self.ARGS, attempts=0, max_dd_limit=self.LIMIT,
+                   candidate_oos_trades=trades)
+        assert not v.accepted
+        assert any("EV-calibration slope" in r for r in v.reasons)
+        assert v.details["oos_calibration"]["ols_slope"] == pytest.approx(0.0)
+
+    def test_accepts_when_predicted_edge_tracks_realized_pnl(self):
+        # pnl == ev exactly -> slope 1, fully calibrated.
+        trades = [_oos_trade(float(i + 1), float(i + 1)) for i in range(45)]
+        v = decide(*self.ARGS, attempts=0, max_dd_limit=self.LIMIT,
+                   candidate_oos_trades=trades)
+        assert v.accepted
+        assert v.details["oos_calibration"]["ols_slope"] == pytest.approx(1.0)

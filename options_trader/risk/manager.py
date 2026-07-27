@@ -22,9 +22,11 @@ class RiskCheck:
 
 
 class RiskManager:
-    def __init__(self, cfg: StrategyConfig, journal: Journal):
+    def __init__(self, cfg: StrategyConfig, journal: Journal,
+                 live_halt_path=None):
         self.cfg = cfg
         self.journal = journal
+        self.live_halt_path = live_halt_path
 
     def check(self, max_loss_per_contract: float,
               today: str | None = None) -> RiskCheck:
@@ -34,6 +36,18 @@ class RiskManager:
 
         if max_loss_per_contract <= 0:
             return RiskCheck(False, ["max loss must be positive"], 0)
+
+        # Imported lazily: journal.live_calibration reaches back into
+        # options_trader.backtest (for ev_calibration), which reaches back
+        # into execution.paper, which imports RiskManager itself — a
+        # module-level import here would be circular.
+        from ..journal.live_calibration import LIVE_HALT_PATH, live_halt_reason
+
+        # Audit veto: the slow loop (loop/audit_live.py) halts the fast one
+        # when live fills stop confirming the model's predicted edge.
+        halt = live_halt_reason(self.live_halt_path or LIVE_HALT_PATH)
+        if halt:
+            reasons.append(f"live audit halt: {halt}")
 
         # Kill switch: consecutive losses
         streak = self.journal.consecutive_losses()

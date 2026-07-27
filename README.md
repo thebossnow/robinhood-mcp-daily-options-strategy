@@ -49,11 +49,18 @@ options_trader/
   risk/           RiskManager: sizing, daily loss limit, kill switch
   execution/      PaperBroker (pessimistic fills); template for MCP executor
   journal/        SQLite journal: every entry/exit + filter values at entry
+                  live_calibration.py: predicted-vs-realized on real fills
   backtest/       replay stored snapshots to expiry settlement
+                  calibration.py: predicted-vs-realized on backtest trades
 scripts/
   scan.py         daily scan → report + runs/scan_*.json
   paper_trade.py  open / close / settle / status / stats
   backtest.py     replay data_snapshots/ once expiries have settled
+  calibrate.py    predicted p_win/EV vs realized, over backtest trades
+  calibrate_live.py  same study, over real closed trades in the journal
+loop/
+  evaluate.py     autoresearch-loop verifier (walk-forward + calibration)
+  audit_live.py   periodic live-drift check; can halt new entries
 ```
 
 The `DataProvider` interface is the MCP seam: when Robinhood MCP options
@@ -79,9 +86,32 @@ Every vertical (bull call / bear put, configurable widths) must pass **all**:
 
 `RiskManager` refuses any trade that would breach: max loss > 1% of equity
 per trade, realized daily loss past 2% of equity, more than 3 open positions,
-3 consecutive losses (kill switch — requires human review to resume), or
-total open risk past a portfolio heat cap. The paper broker (and any future
-live executor) cannot open a position without a passing check.
+3 consecutive losses (kill switch — requires human review to resume), total
+open risk past a portfolio heat cap, or an active live-audit halt (below).
+The paper broker (and any future live executor) cannot open a position
+without a passing check.
+
+## Live calibration and the audit halt
+
+The backtest calibration study (below) only ever sees replayed data. Two more
+pieces close the loop against what actually happens in the account:
+
+```bash
+python scripts/calibrate_live.py                 # predicted EV vs realized P&L, real fills
+python loop/audit_live.py                         # periodic drift check (run weekly)
+python loop/audit_live.py --clear                 # resume after reviewing a halt
+```
+
+`scripts/calibrate_live.py` reports predicted `ev_after_costs` vs. realized
+P&L over the journal's closed (paper or live) trades — the gap between what
+the backtest promised and what actually settled. `loop/audit_live.py` is the
+slow loop watching the fast one: once there are ≥ 40 live trades with a
+recorded prediction, if the EV-calibration slope collapses (≤ 0) or mean
+realized P&L turns non-positive, it writes `loop/live_halt.json` and
+`RiskManager` refuses new entries until a human runs `--clear`. This is
+separate from the consecutive-loss kill switch above — that catches a losing
+streak; this catches the model's predictions quietly decoupling from reality
+while the streak still looks fine.
 
 ## Daily workflow
 
@@ -159,6 +189,10 @@ Non-negotiable properties, enforced in code rather than prose:
   out; a variant must improve in-sample *and* not regress out-of-sample.
 - **Escalating acceptance bar.** Each rejected attempt raises the required
   improvement margin, as a guard against multiple-comparisons data mining.
+- **OOS calibration pairing.** With ≥40 OOS settled trades, a candidate's
+  predicted EV must itself track its own out-of-sample P&L (positive OLS
+  slope) — beating baseline on average isn't enough if the "edge" doesn't
+  cash on held-out data.
 - **Human merge.** An accepted variant becomes a pull request for review.
   Nothing the loop produces merges automatically.
 

@@ -28,6 +28,19 @@ class TestRiskManager:
         # 1% of 10k = $100 cap -> 1 contract at $60 risk
         assert check.max_contracts == 1
 
+    def test_live_audit_halt_refuses_new_entries(self, cfg, journal, tmp_path):
+        import json
+        halt_path = tmp_path / "live_halt.json"
+        halt_path.write_text(json.dumps({"reasons": ["EV-calibration slope -0.4 <= 0"]}))
+        check = RiskManager(cfg, journal, live_halt_path=halt_path).check(60.0)
+        assert not check.allowed
+        assert any("live audit halt" in r for r in check.reasons)
+
+    def test_no_halt_file_allows_trading(self, cfg, journal, tmp_path):
+        check = RiskManager(cfg, journal,
+                            live_halt_path=tmp_path / "absent.json").check(60.0)
+        assert check.allowed
+
     def test_refuses_oversized_single_contract(self, cfg, journal):
         check = RiskManager(cfg, journal).check(max_loss_per_contract=150.0)
         assert not check.allowed
@@ -95,3 +108,15 @@ class TestJournal:
         assert s["win_rate"] == 0.5
         assert s["total_pnl"] == pytest.approx(30.0)
         assert s["max_drawdown"] == pytest.approx(-30.0)
+
+    def test_closed_trades_excludes_open_and_no_trade(self, journal):
+        open_id = journal.record_entry(_fake_candidate(), 1, entry_debit=0.60)
+        closed_id = journal.record_entry(_fake_candidate(), 1, entry_debit=0.60)
+        journal.record_exit(closed_id, exit_value=1.0)
+        expired_id = journal.record_entry(_fake_candidate(), 1, entry_debit=0.60)
+        journal.record_exit(expired_id, exit_value=0.0, status="expired")
+        journal.log_no_trade("no setups today")
+
+        closed = journal.closed_trades()
+        assert {r.id for r in closed} == {closed_id, expired_id}
+        assert open_id not in {r.id for r in closed}
