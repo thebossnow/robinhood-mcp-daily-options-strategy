@@ -20,6 +20,15 @@ from ..signals.candidates import SpreadCandidate
 from ..signals.credit import CreditPosition, intrinsic_close_cost
 
 
+def take_profit_target(entry_debit: float, width: float,
+                       take_profit_pct: float) -> float:
+    """Spread value (per share) at which to close for the configured profit target.
+
+    e.g. entry=1.43, width=5, pct=0.75 → target=4.11 (captured 75% of $3.57 max gain)
+    """
+    return entry_debit + take_profit_pct * (width - entry_debit)
+
+
 def settlement_value(kind: str, long_strike: float, short_strike: float,
                      settlement_price: float) -> float:
     """Per-share value of a vertical at expiry given the settlement price."""
@@ -84,6 +93,10 @@ class PaperBroker:
             trade_id, round(value, 4), status="expired",
             notes=f"settled at underlying {settlement_price:.2f}",
         )
+
+    def take_profit_target(self, rec: TradeRecord) -> float:
+        """Spread value (per share) that triggers a take-profit close."""
+        return take_profit_target(rec.entry_debit, rec.width, self.cfg.take_profit_pct)
 
     def _entry_candidate(self, trade_id: int) -> SpreadCandidate | None:
         row = self.journal._get_row(trade_id)

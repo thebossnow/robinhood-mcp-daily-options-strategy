@@ -84,9 +84,11 @@ def cmd_status(args) -> int:
     print(f"Open positions: {len(open_)} | open risk ${j.open_risk():.0f} | "
           f"consecutive losses: {j.consecutive_losses()}")
     for r in open_:
+        tp = broker.take_profit_target(r)
         print(f"  #{r.id} {r.underlying} {r.expiration} {r.kind} "
               f"{r.long_strike:g}/{r.short_strike:g} x{r.contracts} "
-              f"@ {r.entry_debit:.2f} (max loss ${r.max_loss:.0f})")
+              f"@ {r.entry_debit:.2f} (max loss ${r.max_loss:.0f}) "
+              f"[TP target: spread mid >= {tp:.2f}]")
     return 0
 
 

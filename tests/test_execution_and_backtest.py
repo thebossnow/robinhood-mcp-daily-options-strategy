@@ -1,7 +1,13 @@
+from copy import deepcopy
+from datetime import datetime, timedelta
+
+import pandas as pd
 import pytest
 
 from options_trader.backtest import BacktestEngine
+from options_trader.data.provider import ChainSnapshot
 from options_trader.execution import PaperBroker, settlement_value
+from options_trader.execution.paper import take_profit_target
 from options_trader.journal import Journal
 from options_trader.signals import generate_candidates
 
@@ -90,3 +96,86 @@ class TestBacktestEngine:
         result = BacktestEngine(cfg).run([snapshot], settlements={})
         assert result.summary["trades"] == 0
         assert result.skipped_unsettled >= 1
+
+    def test_expired_trades_have_exit_reason(self, cfg, snapshot):
+        result = BacktestEngine(cfg).run(
+            [snapshot], {("TEST", snapshot.expiration): 90.0}
+        )
+        assert result.trades[0]["exit_reason"] == "expired"
+        assert result.trades[0]["exit_date"] == snapshot.expiration
+
+    def test_summary_includes_exit_reasons(self, cfg, snapshot):
+        result = BacktestEngine(cfg).run(
+            [snapshot], {("TEST", snapshot.expiration): 90.0}
+        )
+        assert "exit_reasons" in result.summary
+        assert result.summary["exit_reasons"].get("expired", 0) >= 1
+
+
+def _later_snapshot(snapshot: ChainSnapshot, minutes: int,
+                    value_factor: float) -> ChainSnapshot:
+    """Returns a copy of snapshot taken `minutes` later with all mids scaled."""
+    later = (datetime.fromisoformat(snapshot.taken_at)
+             + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    chain = snapshot.chain.copy()
+    mid = (chain["bid"] + chain["ask"]) / 2.0 * value_factor
+    half = (chain["ask"] - chain["bid"]) / 2.0
+    chain["bid"] = (mid - half).clip(lower=0.0)
+    chain["ask"] = mid + half
+    return ChainSnapshot(
+        underlying=snapshot.underlying,
+        spot=snapshot.spot,
+        expiration=snapshot.expiration,
+        taken_at=later,
+        chain=chain,
+    )
+
+
+class TestTakeProfitBacktest:
+    def test_take_profit_fires_when_spread_appreciates(self, cfg, snapshot):
+        # Scale mids to 4x — the spread will be worth ~width, well above target.
+        later = _later_snapshot(snapshot, minutes=60, value_factor=4.0)
+        result = BacktestEngine(cfg).run(
+            [snapshot, later], settlements={}, per_snapshot_trades=1
+        )
+        assert result.trades, "expected a take-profit trade"
+        t = result.trades[0]
+        assert t["exit_reason"] == "take_profit"
+        assert t["pnl"] > 0
+        assert t["exit_date"] == later.taken_at[:10]
+
+    def test_falls_through_to_settlement_when_not_hit(self, cfg, snapshot):
+        # Scale mids to 0.5x — spread depreciates, take-profit never fires.
+        later = _later_snapshot(snapshot, minutes=60, value_factor=0.5)
+        settlements = {("TEST", snapshot.expiration): 90.0}
+        result = BacktestEngine(cfg).run(
+            [snapshot, later], settlements=settlements, per_snapshot_trades=1
+        )
+        # entry snapshot + later snapshot both generate trades, but entries
+        # in the later snapshot have no further snapshots to take profit from.
+        tp_trades = [t for t in result.trades if t["exit_reason"] == "take_profit"]
+        exp_trades = [t for t in result.trades if t["exit_reason"] == "expired"]
+        assert not tp_trades
+        assert exp_trades
+
+    def test_take_profit_pct_1_disables_early_exit(self, cfg, snapshot):
+        cfg_hold = deepcopy(cfg)
+        cfg_hold.take_profit_pct = 1.0
+        later = _later_snapshot(snapshot, minutes=60, value_factor=4.0)
+        settlements = {("TEST", snapshot.expiration): 90.0}
+        result = BacktestEngine(cfg_hold).run(
+            [snapshot, later], settlements=settlements, per_snapshot_trades=1
+        )
+        assert all(t["exit_reason"] == "expired" for t in result.trades)
+
+    def test_take_profit_target_helper(self, cfg):
+        # entry=1.0, width=5.0, pct=0.75 → target = 1 + 0.75*4 = 4.0
+        assert take_profit_target(1.0, 5.0, 0.75) == pytest.approx(4.0)
+
+    def test_paper_broker_take_profit_target(self, cfg, snapshot, broker):
+        cand = _top_candidate(cfg, snapshot)
+        tid, _ = broker.open(cand)
+        rec = broker.journal.get(tid)
+        tp = broker.take_profit_target(rec)
+        expected = rec.entry_debit + cfg.take_profit_pct * (rec.width - rec.entry_debit)
+        assert tp == pytest.approx(expected)
