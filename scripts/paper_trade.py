@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.config import StrategyConfig
+from options_trader.data import SETTLEMENT_PROVIDERS
 from options_trader.execution import PaperBroker
 from options_trader.journal import Journal
 from options_trader.signals.candidates import SpreadCandidate
@@ -58,8 +59,8 @@ def cmd_close(args) -> int:
 def cmd_settle(args) -> int:
     broker = _broker(args)
     from datetime import date
-    from options_trader.data import YFinanceProvider
-    provider = YFinanceProvider()
+    from options_trader.data import get_settlement_provider
+    provider = get_settlement_provider(args.price_provider)
     today = date.today().isoformat()
     expired = [r for r in broker.journal.open_positions() if r.expiration < today]
     if not expired:
@@ -107,6 +108,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--journal", default="journal.db")
     ap.add_argument("--config", help="Path to StrategyConfig JSON")
+    ap.add_argument("--price-provider", choices=SETTLEMENT_PROVIDERS,
+                    default="yfinance",
+                    help="Settlement-close source for `settle` (default "
+                         "yfinance; alphavantage needs ALPHA_VANTAGE_API_KEY, "
+                         "free tier)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("open")
