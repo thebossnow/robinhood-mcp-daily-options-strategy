@@ -16,10 +16,18 @@ Requires a free API key: https://www.alphavantage.co/support/#api-key,
 read from the ALPHA_VANTAGE_API_KEY env var or passed explicitly.
 
 Free-tier rate limits are tight (historically ~5 requests/minute, 25/day),
-so `get_settlement_close` fetches and caches a symbol's full daily series on
+so `get_settlement_close` fetches and caches a symbol's daily series on
 first use — settling many expired trades for the same underlying costs one
 request, not one per trade — and `pause_s` spaces out requests across
 different underlyings.
+
+`outputsize` defaults to Alpha Vantage's `compact` response (the last ~100
+trading days, ~5 months): `full` is reserved for paid plans and returns an
+`Information`/premium error on a free key, which would otherwise fail every
+lookup on the advertised free-tier path. `compact` comfortably covers this
+strategy's settlement dates (DTE window is a few weeks at most), so it's the
+default; pass `output_size="full"` explicitly if you have a paid key and
+need to settle something older.
 """
 
 from __future__ import annotations
@@ -33,7 +41,8 @@ API_URL = "https://www.alphavantage.co/query"
 
 
 class AlphaVantageProvider:
-    def __init__(self, api_key: str | None = None, pause_s: float = 12.0):
+    def __init__(self, api_key: str | None = None, pause_s: float = 12.0,
+                 output_size: str = "compact"):
         self.api_key = api_key or os.environ.get("ALPHA_VANTAGE_API_KEY")
         if not self.api_key:
             raise RuntimeError(
@@ -42,6 +51,7 @@ class AlphaVantageProvider:
                 "https://www.alphavantage.co/support/#api-key)"
             )
         self.pause_s = pause_s
+        self.output_size = output_size
         self._daily_cache: dict[str, dict] = {}
         self._last_request = 0.0
 
@@ -71,16 +81,18 @@ class AlphaVantageProvider:
             body = self._get({
                 "function": "TIME_SERIES_DAILY",
                 "symbol": underlying,
-                "outputsize": "full",
+                "outputsize": self.output_size,
             })
             self._daily_cache[underlying] = body.get("Time Series (Daily)", {})
         return self._daily_cache[underlying]
 
     def get_settlement_close(self, underlying: str, expiration: str) -> float | None:
         """Official close on expiration day, for settling expired paper
-        trades. None if that date has no entry in the free daily history
-        (e.g. a future date the market hasn't traded yet, or a date outside
-        the ~20+ years the free endpoint covers)."""
+        trades. None if that date has no entry in the fetched daily history
+        — a future date the market hasn't traded yet, or (on the default
+        `compact` series) a date older than ~100 trading days back. Pass
+        output_size='full' at construction (needs a paid AV plan) to settle
+        older expirations."""
         row = self._daily_series(underlying).get(expiration)
         if row is None:
             return None

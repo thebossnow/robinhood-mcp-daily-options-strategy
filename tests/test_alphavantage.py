@@ -44,6 +44,23 @@ class TestAlphaVantageProvider:
         assert px == pytest.approx(773.03)
         assert get.call_count == 1
 
+    def test_defaults_to_compact_outputsize(self):
+        # 'full' is premium-only on a free key and would fail every lookup
+        # (see the P1 review on PR #19) — compact must be the default.
+        provider = AlphaVantageProvider(api_key="demo", pause_s=0.0)
+        with mock.patch("options_trader.data.alphavantage.requests.get",
+                        return_value=_resp(DAILY_BODY)) as get:
+            provider.get_settlement_close("SPY", "2026-08-10")
+        assert get.call_args.kwargs["params"]["outputsize"] == "compact"
+
+    def test_full_outputsize_is_opt_in(self):
+        provider = AlphaVantageProvider(api_key="demo", pause_s=0.0,
+                                        output_size="full")
+        with mock.patch("options_trader.data.alphavantage.requests.get",
+                        return_value=_resp(DAILY_BODY)) as get:
+            provider.get_settlement_close("SPY", "2026-08-10")
+        assert get.call_args.kwargs["params"]["outputsize"] == "full"
+
     def test_unknown_date_returns_none(self):
         provider = AlphaVantageProvider(api_key="demo", pause_s=0.0)
         with mock.patch("options_trader.data.alphavantage.requests.get",
