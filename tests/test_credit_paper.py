@@ -3,6 +3,7 @@ validated variants, live liquidity gate, manage-script marking."""
 
 import json
 import sqlite3
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -218,3 +219,39 @@ class TestManageMarking:
         legs = [{"type": "put", "strike": 650.0, "side": -1},
                 {"type": "put", "strike": 625.0, "side": 1}]
         assert mark_position(legs, chain) is None
+
+
+class TestPickExpiration:
+    def test_picks_closest_to_target_within_window(self):
+        from scripts.scan_credit import pick_expiration
+        today = date(2026, 7, 13)
+        expirations = ["2026-08-03", "2026-08-10", "2026-08-28", "2026-09-04"]
+        # DTE: 21, 28, 46, 53 — window 35-50 keeps only 46; target 45
+        picked = pick_expiration(expirations, today, 35, 50, 45)
+        assert picked == "2026-08-28"
+
+    def test_no_expiration_in_window_returns_none(self):
+        from scripts.scan_credit import pick_expiration
+        today = date(2026, 7, 13)
+        expirations = ["2026-08-03", "2026-08-10"]   # 21, 28 DTE
+        assert pick_expiration(expirations, today, 35, 50, 45) is None
+
+
+class TestResolveDteWindow:
+    def test_weekly_variant_keeps_own_window(self):
+        from scripts.scan_credit import resolve_dte_window
+        cfg = paper_cfg(min_dte=35, max_dte=50)
+        vcfg = VALIDATED["spy_weekly_put10"]
+        assert resolve_dte_window(vcfg, cfg, is_weekly=True) == (5, 14)
+
+    def test_long_dte_variant_intersected_with_account_window(self):
+        from scripts.scan_credit import resolve_dte_window
+        cfg = paper_cfg(min_dte=35, max_dte=50)
+        vcfg = VALIDATED["spy_condor15"]   # variant default: 25-50
+        assert resolve_dte_window(vcfg, cfg, is_weekly=False) == (35, 50)
+
+    def test_account_window_wider_than_variant_leaves_variant_unchanged(self):
+        from scripts.scan_credit import resolve_dte_window
+        cfg = paper_cfg(min_dte=1, max_dte=90)
+        vcfg = VALIDATED["spy_put10"]   # variant default: 25-50
+        assert resolve_dte_window(vcfg, cfg, is_weekly=False) == (25, 50)
