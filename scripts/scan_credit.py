@@ -115,7 +115,7 @@ def main() -> int:
                    f"{min_dte}-{max_dte} DTE")
             print(msg)
             if not args.dry_run:
-                journal.log_no_trade(msg)
+                journal.log_no_trade(msg, strategy="credit")
             continue
 
         if (name, expiration) in open_kinds:
@@ -137,7 +137,7 @@ def main() -> int:
             msg = f"{name}: NO QUALIFYING TRADE (gates failed on live chain)"
             print(msg)
             if not args.dry_run:
-                journal.log_no_trade(msg)
+                journal.log_no_trade(msg, strategy="credit")
             continue
 
         desc = (f"{name}: credit {pos.credit:.2f} (frac {pos.credit_frac:.3f}), "
@@ -152,12 +152,13 @@ def main() -> int:
         if trade_id is None:
             msg = f"{name}: risk manager refused — {'; '.join(check.reasons)}"
             print(msg)
-            journal.log_no_trade(msg)
+            journal.log_no_trade(msg, strategy="credit")
         else:
             print(f"OPENED #{trade_id} {desc}")
 
+    credit_stats = journal.stats(strategy="credit")
     print(f"\n{datetime.now().isoformat(timespec='seconds')} scan complete. "
-          f"Journal stats: {journal.stats()}")
+          f"Journal stats: {credit_stats}")
     return 0
 
 

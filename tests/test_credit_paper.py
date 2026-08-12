@@ -116,6 +116,39 @@ class TestCreditJournal:
         assert cand["variant"] == "spy_condor15"
 
 
+class TestStrategyFilteredStats:
+    """stats()/no_trade_count() must not blend the credit and vertical
+    (debit) strategies' journal rows together — each strategy's paper-
+    trading validation gate reads its own numbers only."""
+
+    def test_stats_filters_closed_trades_by_strategy(self, tmp_path):
+        j = Journal(tmp_path / "j.db")
+        vtid = j.record_entry(
+            {"underlying": "SPY", "expiration": "2026-08-28", "kind": "bull_call",
+             "long_strike": 600.0, "short_strike": 605.0, "width": 5.0}, 1, 2.0)
+        j.record_exit(vtid, exit_value=3.0)   # vertical: +$100
+
+        ctid = j.record_credit_entry(make_condor(credit=3.0).to_dict(), 1)
+        j.record_exit(ctid, exit_value=1.2)   # credit: +$180
+
+        assert j.stats()["closed_trades"] == 2
+        credit_stats = j.stats(strategy="credit")
+        assert credit_stats["closed_trades"] == 1
+        assert credit_stats["total_pnl"] == pytest.approx(180.0)
+        vertical_stats = j.stats(strategy="vertical")
+        assert vertical_stats["closed_trades"] == 1
+        assert vertical_stats["total_pnl"] == pytest.approx(100.0)
+
+    def test_log_no_trade_tags_and_filters_by_strategy(self, tmp_path):
+        j = Journal(tmp_path / "j.db")
+        j.log_no_trade("no vertical setup")                       # defaults to vertical
+        j.log_no_trade("no credit setup", strategy="credit")
+        assert j.no_trade_count() == 2
+        assert j.no_trade_count(strategy="credit") == 1
+        assert j.no_trade_count(strategy="vertical") == 1
+        assert j.stats(strategy="credit")["no_trade_days"] == 1
+
+
 class TestPaperBrokerCredit:
     def test_open_and_profit_close(self, tmp_path):
         j = Journal(tmp_path / "j.db")

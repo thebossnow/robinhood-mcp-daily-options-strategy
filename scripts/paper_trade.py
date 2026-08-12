@@ -94,7 +94,7 @@ def cmd_status(args) -> int:
 
 def cmd_stats(args) -> int:
     broker = _broker(args)
-    stats = broker.journal.stats()
+    stats = broker.journal.stats(strategy="vertical")
     if stats.get("closed_trades", 0) == 0:
         print("No closed trades yet.")
         return 0

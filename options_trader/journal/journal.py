@@ -263,12 +263,15 @@ class Journal:
                 break
         return n
 
-    def stats(self) -> dict:
-        rows = self._conn.execute(
-            "SELECT realized_pnl FROM trades WHERE status != 'open'"
-        ).fetchall()
+    def stats(self, strategy: str | None = None) -> dict:
+        query = "SELECT realized_pnl FROM trades WHERE status != 'open'"
+        params: tuple = ()
+        if strategy is not None:
+            query += " AND strategy=?"
+            params = (strategy,)
+        rows = self._conn.execute(query, params).fetchall()
         pnls = [r["realized_pnl"] for r in rows if r["realized_pnl"] is not None]
-        no_trade = self.no_trade_count()
+        no_trade = self.no_trade_count(strategy)
         if not pnls:
             return {"closed_trades": 0, "no_trade_days": no_trade}
 
@@ -292,7 +295,8 @@ class Journal:
         }
 
     # --- PR#3-inspired no-trade logging (adapted to existing SQLite schema) ---
-    def log_no_trade(self, thesis: str = "", date: str | None = None) -> None:
+    def log_no_trade(self, thesis: str = "", date: str | None = None,
+                     strategy: str = "vertical") -> None:
         """Record a 'no qualifying trade' day for statistics and discipline.
         Uses a lightweight row (status='no_trade')."""
         from datetime import date as _date
@@ -300,34 +304,22 @@ class Journal:
         self._conn.execute(
             """INSERT INTO trades
                (opened_at, underlying, expiration, kind, long_strike, short_strike,
-                width, contracts, entry_debit, max_loss, max_profit, status, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'no_trade', ?)""",
-            (day, "", "", "no_trade", 0, 0, 0, 0, 0, 0, 0, f"NO TRADE: {thesis}"),
+                width, contracts, entry_debit, max_loss, max_profit, status, notes,
+                strategy)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'no_trade', ?, ?)""",
+            (day, "", "", "no_trade", 0, 0, 0, 0, 0, 0, 0, f"NO TRADE: {thesis}",
+             strategy),
         )
         self._conn.commit()
 
-    def no_trade_count(self) -> int:
-        val = self._conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE status='no_trade'"
-        ).fetchone()[0]
+    def no_trade_count(self, strategy: str | None = None) -> int:
+        query = "SELECT COUNT(*) FROM trades WHERE status='no_trade'"
+        params: tuple = ()
+        if strategy is not None:
+            query += " AND strategy=?"
+            params = (strategy,)
+        val = self._conn.execute(query, params).fetchone()[0]
         return int(val)
-        wins = [p for p in pnls if p > 0]
-        running, peak, max_dd = 0.0, 0.0, 0.0
-        for p in pnls:
-            running += p
-            peak = max(peak, running)
-            max_dd = min(max_dd, running - peak)
-        return {
-            "closed_trades": len(pnls),
-            "win_rate": round(len(wins) / len(pnls), 4),
-            "total_pnl": round(sum(pnls), 2),
-            "expectancy_per_trade": round(sum(pnls) / len(pnls), 2),
-            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
-            "avg_loss": round(
-                sum(p for p in pnls if p <= 0) / max(1, len(pnls) - len(wins)), 2
-            ),
-            "max_drawdown": round(max_dd, 2),
-        }
 
 
 def _to_record(row: sqlite3.Row) -> TradeRecord:

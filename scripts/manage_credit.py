@@ -122,7 +122,7 @@ def main() -> int:
             print(f"{tag}: hold — captured {captured:+.2f} / target "
                   f"{target:.2f}, exit cost est {exit_cost_est:.2f}")
 
-    print(f"Journal stats: {journal.stats()}")
+    print(f"Journal stats: {journal.stats(strategy='credit')}")
     return 0
 
 
