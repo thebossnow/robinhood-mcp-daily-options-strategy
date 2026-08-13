@@ -3,7 +3,7 @@
   "min_dte": 35,
   "max_dte": 50,
   "account_equity": 50000.0,
-  "max_risk_per_trade_pct": 0.05,
+  "max_risk_per_trade_pct": 0.06,
   "daily_loss_limit_pct": 0.12,
   "max_open_positions": 6,
   "max_consecutive_losses": 5,

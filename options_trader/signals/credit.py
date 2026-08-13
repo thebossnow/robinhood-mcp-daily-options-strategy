@@ -120,6 +120,17 @@ VALIDATED: dict[str, CreditVariantConfig] = {
         name="spy_put10", short_put_delta=0.10, short_call_delta=None,
         wing_width_frac=0.02, min_credit_frac=0.03, exit_on_breach=False,
     ),
+    # Weekly short-DTE put spread: 7-14 DTE, 10-delta short, 2% wing.
+    # Not backtested over the full sweep (DoltHub lacks weekly expirations
+    # in 2022-23); added for fast data accumulation in the paper phase —
+    # expect ~1 closed trade/week vs 6-7 weeks for the 45-DTE variants.
+    # time_exit_frac=0.5 → exits at ~4 DTE (half of 7-10 DTE entry).
+    "spy_weekly_put10": CreditVariantConfig(
+        name="spy_weekly_put10", short_put_delta=0.10, short_call_delta=None,
+        wing_width_frac=0.02, min_credit_frac=0.02, exit_on_breach=False,
+        min_dte=5, max_dte=14, target_dte=7,
+        time_exit_dte=4, time_exit_frac=0.5,
+    ),
 }
 # The sweep found every config negative once XLF/XLE were included; the
 # validated universe is deliberately index-only.

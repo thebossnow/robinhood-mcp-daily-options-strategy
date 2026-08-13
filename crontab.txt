@@ -19,7 +19,11 @@
 
 # Credit-strategy PAPER trading (validated variants, notional $50k account —
 # see configs/credit_paper.json; not sized for real money):
-# entries Mondays 10:30 ET (= 7:30 PT), management daily 15:45 ET
-# (= 12:45 PT — liquid quotes, before the close auction).
-30 7 * * 1 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_entry.sh
+# entries run daily 10:30 ET (= 7:30 PT) — scan_credit.py self-gates:
+#   long-DTE variants (spy_condor15, spy_put10) enter only on Mondays;
+#   weekly variant (spy_weekly_put10) enters any weekday with open position slot.
+# management daily 15:45 ET (= 12:45 PT — liquid quotes, before close auction).
+30 7 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_entry.sh
 45 12 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_manage.sh
+# Daily digest 16:00 ET (= 13:00 PT): open positions, P&L vs target, stats
+0 13 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/daily_digest.sh
