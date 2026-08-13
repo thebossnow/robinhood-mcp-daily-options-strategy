@@ -254,6 +254,91 @@ class TestManageMarking:
         assert mark_position(legs, chain) is None
 
 
+class TestManagePosition:
+    """manage_position() must settle expired positions through the
+    dedicated settlement_provider, never through the (possibly
+    MCPDataProvider) marking `provider` — that mismatch is what crashed
+    scripts/manage_credit.py's cron job daily from 2026-08-03 onward,
+    since MCPDataProvider has no get_settlement_close()."""
+
+    def _open_position(self, tmp_path, expiration="2026-08-28", credit=3.0):
+        j = Journal(tmp_path / "j.db")
+        cfg = paper_cfg()
+        broker = PaperBroker(cfg, j)
+        pos = make_condor(credit=credit)
+        pos.expiration = expiration
+        tid = j.record_credit_entry(pos.to_dict(), 1)
+        return j, cfg, broker, j.get(tid)
+
+    def test_settlement_never_touches_marking_provider(self, tmp_path):
+        from scripts.manage_credit import manage_position
+
+        class NoSettlementCloseProvider:
+            """Stands in for MCPDataProvider, which has no
+            get_settlement_close — any call into it here is the bug."""
+            def get_chain(self, *a, **kw):
+                raise AssertionError("must not mark an expired position")
+
+        class FakeSettlementProvider:
+            def get_settlement_close(self, underlying, expiration):
+                return 640.0
+
+        j, cfg, broker, rec = self._open_position(tmp_path, expiration="2020-01-01")
+        msg = manage_position(rec, cfg, j, broker, NoSettlementCloseProvider(),
+                              FakeSettlementProvider(), date(2026, 8, 13))
+        assert "SETTLED" in msg
+        assert j.get(rec.id).status == "expired"
+
+    def test_settlement_pending_close_leaves_position_open(self, tmp_path):
+        from scripts.manage_credit import manage_position
+
+        class FakeSettlementProvider:
+            def get_settlement_close(self, underlying, expiration):
+                return None
+
+        j, cfg, broker, rec = self._open_position(tmp_path, expiration="2020-01-01")
+        msg = manage_position(rec, cfg, j, broker, None,
+                              FakeSettlementProvider(), date(2026, 8, 13))
+        assert "no settlement close yet" in msg
+        assert j.get(rec.id).status == "open"
+
+    def test_open_position_uses_marking_provider_not_settlement(self, tmp_path):
+        from scripts.manage_credit import manage_position
+
+        class FakeMarkingProvider:
+            def get_chain(self, underlying, expiration):
+                chain = pd.DataFrame([
+                    {"type": "put", "strike": 650.0, "bid": 0.5, "ask": 0.6},
+                    {"type": "put", "strike": 625.0, "bid": 0.05, "ask": 0.10},
+                    {"type": "call", "strike": 720.0, "bid": 0.5, "ask": 0.6},
+                    {"type": "call", "strike": 745.0, "bid": 0.05, "ask": 0.10},
+                ])
+                return type("Snap", (), {"chain": chain})()
+
+        class ExplodingSettlementProvider:
+            def get_settlement_close(self, *a, **kw):
+                raise AssertionError("must not settle a non-expired position")
+
+        j, cfg, broker, rec = self._open_position(tmp_path, expiration="2026-12-31")
+        msg = manage_position(rec, cfg, j, broker, FakeMarkingProvider(),
+                              ExplodingSettlementProvider(), date(2026, 8, 13))
+        assert any(s in msg for s in ("PROFIT TARGET", "hold", "TIME EXIT"))
+
+    def test_provider_failure_propagates_to_caller(self, tmp_path):
+        """manage_position doesn't swallow errors — main()'s per-position
+        try/except is what stops one bad position from blocking the rest."""
+        from scripts.manage_credit import manage_position
+
+        class BrokenProvider:
+            def get_chain(self, *a, **kw):
+                raise RuntimeError("network down")
+
+        j, cfg, broker, rec = self._open_position(tmp_path, expiration="2026-12-31")
+        with pytest.raises(RuntimeError):
+            manage_position(rec, cfg, j, broker, BrokenProvider(), None,
+                            date(2026, 8, 13))
+
+
 class TestPickExpiration:
     def test_picks_closest_to_target_within_window(self):
         from scripts.scan_credit import pick_expiration
