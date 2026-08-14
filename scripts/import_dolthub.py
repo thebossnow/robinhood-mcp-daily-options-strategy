@@ -47,8 +47,15 @@ def main() -> int:
 
     total = 0
     for symbol in args.symbols:
-        days = importer.available_dates(symbol, args.start, args.end)
-        print(f"{symbol}: {len(days)} scan days on DoltHub in range")
+        # available_dates() does a DISTINCT-date range scan over the whole
+        # option_chain table, which DoltHub's free API server-side-times-out
+        # on (see DoltHubHistory's docstring in options_trader/data/dolthub.py)
+        # — even for a 6-week range. Trading days from the yfinance spot
+        # lookup are free and exact; fetch_day() below is already a cheap
+        # point-date query per day, matching the access pattern the managed
+        # credit backtest uses successfully.
+        days = sorted(d for (s, d) in spots if s == symbol)
+        print(f"{symbol}: {len(days)} trading days in range (from yfinance)")
         for i, day in enumerate(days):
             rows = importer.fetch_day(symbol, day, max_dte=args.max_dte)
             snaps = rows_to_snapshots(rows, spots)
