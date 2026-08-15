@@ -42,8 +42,11 @@ def main() -> int:
                     help="Data collection mode: only save snapshots (skip human-readable "
                          "report and runs/ JSON). Useful for frequent automated runs.")
     ap.add_argument("--runs-dir", default="runs")
-    ap.add_argument("--provider", choices=["mcp", "yfinance"], default="yfinance",
-                    help="Data source: mcp (Robinhood live) or yfinance (free fallback)")
+    ap.add_argument("--provider", choices=["mcp", "eodhd", "yfinance"],
+                    default="yfinance",
+                    help="Data source: mcp (Robinhood live), eodhd (vendor "
+                         "chains with real volume/OI, needs EODHD_API_KEY), "
+                         "or yfinance (free fallback)")
     args = ap.parse_args()
 
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
@@ -51,6 +54,10 @@ def main() -> int:
         from options_trader.data import MCPDataProvider
         provider = MCPDataProvider()
         print("Using Robinhood MCP (live data)")
+    elif args.provider == "eodhd":
+        from options_trader.data import EODHDProvider
+        provider = EODHDProvider(min_dte=cfg.min_dte, max_dte=cfg.max_dte)
+        print("Using EODHD (vendor option chains)")
     else:
         provider = YFinanceProvider()
     store = SnapshotStore()

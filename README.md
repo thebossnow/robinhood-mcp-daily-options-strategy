@@ -228,6 +228,61 @@ Read results with these caveats in mind:
   higher-fidelity benchmark. Agreement between the two is the signal that
   matters.
 
+## EODHD provider (vendor chains with real volume/OI)
+
+[EODHD](https://eodhd.com) is wired in as a third `DataProvider`
+(`options_trader/data/eodhd.py`), alongside Robinhood MCP and yfinance:
+
+```bash
+export EODHD_API_KEY=your_key            # never hard-code the token
+python scripts/check_eodhd.py            # read-only smoke test, see below
+python scripts/scan.py --provider eodhd
+```
+
+**Why it earns its place:** the DoltHub dataset above has no volume or
+open-interest columns, so its backtests must zero those liquidity minimums
+and are optimistic on fillability. EODHD's option rows carry real `volume`
+and `openInterest`, so the *production* liquidity filter runs unmodified
+over history — `EODHDHistory.snapshots()` produces the same `ChainSnapshot`
+format the existing backtest and verifier already consume. The test suite
+pins this contrast directly: DoltHub rows only pass a relaxed config,
+EODHD rows pass the strict one.
+
+Two products are involved, and the distinction matters:
+
+| | endpoint | plan |
+|---|---|---|
+| spot / daily closes | `/api/real-time`, `/api/eod` | any plan, incl. free |
+| option contracts + EOD chains | `/api/mp/unicornbay/options/*` | **paid add-on** |
+
+The options paths are the UnicornBay marketplace SKU, sold separately. A key
+without it gets a 402/403, which the client raises as
+`EODHDSubscriptionError` naming the add-on rather than returning an empty
+chain that would silently read as "no qualifying trade."
+
+**API call budget.** EODHD bills per request and the options endpoints cost
+**10 call-units each** (base endpoints cost 1); the free tier allows 20/day.
+The provider is built around that: `get_expirations` pulls every contract in
+the DTE window in one paginated request and caches it, so scanning N
+expirations costs one options request per underlying, not N. `EODHDClient`
+tracks a running `calls_billed` estimate.
+
+**Request encoding.** The API is JSON:API-flavoured — filters must be sent
+as `filter[underlying_symbol]=SPY`, not flat (`underlying_symbol=SPY` is
+rejected with a validation error), and pagination uses `page[limit]` /
+`page[offset]`. `EODHDClient.get_paged` handles this; callers pass plain
+names. Responses are accepted in either flat or JSON:API `attributes` form,
+and rows missing type/strike/expiration fall back to parsing the OCC
+contract name.
+
+**Verification status, stated honestly:** the unit tests
+(`tests/test_eodhd.py`) mock all HTTP, so they pin request shape, response
+normalization and failure handling — not the vendor's actual field names or
+whether a given key has the add-on. `scripts/check_eodhd.py` closes that gap
+against the live API in one read-only run: it reports whether the add-on is
+active, prints a real chain, and measures how many rows actually carry
+volume/OI/IV. Run it before trusting any backtest built on this source.
+
 ## Credit strategies: put spreads and iron condors (premium selling)
 
 The debit-spread scanner above selects by a model-EV filter that scores the
