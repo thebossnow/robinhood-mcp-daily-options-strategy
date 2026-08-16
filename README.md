@@ -91,6 +91,28 @@ open risk past a portfolio heat cap, or an active live-audit halt (below).
 The paper broker (and any future live executor) cannot open a position
 without a passing check.
 
+All of the above are **reactive** — they respond to realized P&L after a
+loss has already happened. A short-premium strategy's classic failure mode
+is a single large gap move that blows through those limits in one trade,
+before any reactive check ever fires — the strategy that made this project
+look best (a put-only credit spread; see `signals/credit.py`'s
+`put_spread_15`/`spy_put10`) is short volatility, so this isn't a
+hypothetical concern. `risk/vol_regime.py` is the pre-emptive half: it
+refuses NEW entries (never blocks closing an existing position) using VIX
+as a broad-index proxy, on two independent triggers — VIX at/above
+`vix_entry_ceiling` (default 30), or VIX up `vix_spike_pct` (default 30%)
+over `vix_spike_lookback_days` (default 5) trading days, which catches a
+regime change in progress before the absolute level crosses the ceiling.
+It fails **closed**: if VIX data can't be fetched, new entries are refused
+rather than allowed — silently trading through a data outage is worse than
+being occasionally too cautious. Wired into `scan_credit.py` and
+`paper_trade.py` (the two entry points); `manage_credit.py` only closes
+positions, so it's intentionally not gated. Thresholds are sanity-checked
+against this repo's own delta/DTE sweep window (2026-04-07..08-15, VIX
+14.25-25.78, max 5-day spike +40%): the level ceiling never would have
+falsely blocked that window's trades, and the spike trigger is reachable
+within it — not a dead threshold.
+
 ## Live calibration and the audit halt
 
 The backtest calibration study (below) only ever sees replayed data. Two more

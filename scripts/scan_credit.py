@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.config import StrategyConfig
 from options_trader.execution.paper import PaperBroker
+from options_trader.risk.vol_regime import fetch_vix_closes
 from options_trader.journal import Journal
 from options_trader.signals.credit import (
     VALIDATED, CreditVariantConfig, build_position, leg_passes_live_liquidity,
@@ -89,7 +90,10 @@ def main() -> int:
         provider = YFinanceProvider()
 
     journal = Journal(args.journal)
-    broker = PaperBroker(cfg, journal)
+    broker = PaperBroker(
+        cfg, journal,
+        vix_provider=lambda: fetch_vix_closes(cfg.vix_spike_lookback_days),
+    )
     underlying = cfg.underlyings[0]
 
     all_expirations = provider.get_expirations(underlying)

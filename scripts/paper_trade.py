@@ -20,12 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from options_trader.config import StrategyConfig
 from options_trader.execution import PaperBroker
 from options_trader.journal import Journal
+from options_trader.risk.vol_regime import fetch_vix_closes
 from options_trader.signals.candidates import SpreadCandidate
 
 
 def _broker(args) -> PaperBroker:
     cfg = StrategyConfig.from_json(args.config) if args.config else StrategyConfig()
-    return PaperBroker(cfg, Journal(args.journal))
+    return PaperBroker(
+        cfg, Journal(args.journal),
+        vix_provider=lambda: fetch_vix_closes(cfg.vix_spike_lookback_days),
+    )
 
 
 def cmd_open(args) -> int:

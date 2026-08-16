@@ -44,10 +44,15 @@ def settlement_value(kind: str, long_strike: float, short_strike: float,
 
 
 class PaperBroker:
-    def __init__(self, cfg: StrategyConfig, journal: Journal):
+    def __init__(self, cfg: StrategyConfig, journal: Journal, vix_provider=None):
+        """`vix_provider`: passed straight through to RiskManager — None
+        (the default) skips the volatility-regime gate, so tests and ad-hoc
+        scripts don't need network access. Production entry points
+        (scan_credit.py, manage_credit.py, paper_trade.py) pass
+        risk.vol_regime.fetch_vix_closes explicitly for real protection."""
         self.cfg = cfg
         self.journal = journal
-        self.risk = RiskManager(cfg, journal)
+        self.risk = RiskManager(cfg, journal, vix_provider=vix_provider)
 
     def _entry_slippage(self, cand: SpreadCandidate) -> float:
         half_spreads = (

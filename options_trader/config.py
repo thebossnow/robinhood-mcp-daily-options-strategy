@@ -62,6 +62,15 @@ class StrategyConfig:
     max_open_positions: int = 3
     max_consecutive_losses: int = 3         # kill switch
 
+    # --- Volatility-regime gate (pre-trade, see risk/vol_regime.py) ---
+    # These are REACTIVE-limit siblings' opposite number: the limits above
+    # respond to realized losses; these refuse new entries pre-emptively
+    # when the market is already showing elevated or spiking fear, using
+    # VIX as a broad-index proxy (this repo trades SPY/QQQ/IWM).
+    vix_entry_ceiling: float = 30.0         # refuse new entries at/above this level
+    vix_spike_pct: float = 0.30             # refuse if VIX rose this much...
+    vix_spike_lookback_days: int = 5        # ...over this many trading days
+
     # --- Output ---
     top_n: int = 5
 

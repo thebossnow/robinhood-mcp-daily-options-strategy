@@ -23,10 +23,19 @@ class RiskCheck:
 
 class RiskManager:
     def __init__(self, cfg: StrategyConfig, journal: Journal,
-                 live_halt_path=None):
+                 live_halt_path=None, vix_provider=None):
+        """`vix_provider`: zero-arg callable returning a pandas Series of
+        VIX closes (oldest first), or None. Defaults to None, which SKIPS
+        the volatility-regime gate entirely — tests and ad-hoc scripts
+        shouldn't need network access just to construct a RiskManager.
+        Production entry points (scan_credit.py) must pass the real
+        provider (risk/vol_regime.py's fetch_vix_closes) for this gate to
+        actually protect anything; see that module's docstring for why it
+        exists alongside the reactive limits below."""
         self.cfg = cfg
         self.journal = journal
         self.live_halt_path = live_halt_path
+        self.vix_provider = vix_provider
 
     def check(self, max_loss_per_contract: float,
               today: str | None = None) -> RiskCheck:
@@ -48,6 +57,29 @@ class RiskManager:
         halt = live_halt_reason(self.live_halt_path or LIVE_HALT_PATH)
         if halt:
             reasons.append(f"live audit halt: {halt}")
+
+        # Volatility-regime gate: refuse NEW entries pre-emptively when the
+        # market is already fearful, before any reactive limit below could
+        # fire (see vol_regime.py — this is the pre-emptive half).
+        if self.vix_provider is not None:
+            fetched = self.vix_provider()
+            if fetched is None:
+                # Provider tried and failed — fail closed directly rather
+                # than passing None into check_vol_regime, which would
+                # interpret it as "no data given, fetch live" and mask the
+                # provider's own failure behind a real network call.
+                reasons.append(
+                    "vol regime: check unavailable (provider returned no "
+                    "data) — refusing new entries defensively"
+                )
+            else:
+                from .vol_regime import check_vol_regime
+                vol_check = check_vol_regime(
+                    self.cfg.vix_entry_ceiling, self.cfg.vix_spike_pct,
+                    self.cfg.vix_spike_lookback_days, vix_closes=fetched,
+                )
+                if not vol_check.allowed:
+                    reasons.append(f"vol regime: {vol_check.reason}")
 
         # Kill switch: consecutive losses
         streak = self.journal.consecutive_losses()

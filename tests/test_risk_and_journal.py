@@ -78,6 +78,30 @@ class TestRiskManager:
         assert not check.allowed
         assert any("max open positions" in r for r in check.reasons)
 
+    def test_no_vix_provider_skips_vol_regime_gate(self, cfg, journal):
+        """Default (no vix_provider) must not require network access —
+        every other test in this file relies on that."""
+        check = RiskManager(cfg, journal).check(60.0)
+        assert check.allowed
+
+    def test_vix_provider_calm_allows(self, cfg, journal):
+        import pandas as pd
+        calm = pd.Series([15.0, 15.5, 16.0, 15.8, 16.2, 15.9])
+        check = RiskManager(cfg, journal, vix_provider=lambda: calm).check(60.0)
+        assert check.allowed
+
+    def test_vix_provider_elevated_refuses(self, cfg, journal):
+        import pandas as pd
+        elevated = pd.Series([28.0, 29.0, 30.0, 31.0, 32.0, 35.0])
+        check = RiskManager(cfg, journal, vix_provider=lambda: elevated).check(60.0)
+        assert not check.allowed
+        assert any("vol regime" in r for r in check.reasons)
+
+    def test_vix_provider_none_data_fails_closed(self, cfg, journal):
+        check = RiskManager(cfg, journal, vix_provider=lambda: None).check(60.0)
+        assert not check.allowed
+        assert any("vol regime" in r and "unavailable" in r for r in check.reasons)
+
 
 class TestJournal:
     def test_entry_exit_roundtrip_pnl(self, journal):
