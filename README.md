@@ -228,6 +228,81 @@ Read results with these caveats in mind:
   higher-fidelity benchmark. Agreement between the two is the signal that
   matters.
 
+## EODHD historical backtest (paid, real volume/OI)
+
+[EODHD](https://eodhd.com/financial-apis/stock-options-data)'s marketplace
+`/mp/unicornbay/options/eod` endpoint is a second historical-options source
+that closes the DoltHub dataset's biggest gap: it carries real per-contract
+`volume` and `open_interest`, so backtests over it exercise the strategy's
+actual liquidity filters (`min_open_interest=500`, `min_volume=50`) instead
+of a zeroed override. It supplements DoltHub rather than replacing it —
+DoltHub stays the free default; run EODHD imports when you want a
+liquidity-aware second opinion on a DoltHub result.
+
+```bash
+echo "EODHD_API_KEY=..." > .env        # gitignored
+python scripts/import_eodhd.py --symbols SPY QQQ IWM \
+    --start 2024-01-01 --end 2026-06-30
+python scripts/backtest.py --snapshots-dir data_snapshots_eodhd
+```
+
+Caveats:
+
+- **Requires the "US Stock Options" marketplace add-on** on your EODHD
+  plan — the base/free tier 403s on this endpoint (`options_trader/data/
+  eodhd.py`'s client raises a RuntimeError naming the add-on when that
+  happens, rather than a bare HTTP error). Each request costs 10 API calls
+  against your quota.
+- EOD snapshots only (stamped 16:00), same hold-to-expiry assumption as
+  the DoltHub import.
+- No underlying spot price in the response (only `moneyness`) — spot is
+  joined from yfinance daily closes, same as the DoltHub importer
+  (`build_spot_lookup`, shared between both).
+- The endpoint paginates at 1000 rows/page with a hard `page[offset]` cap
+  of 10000 — a symbol/day with more contracts than that within `--max-dte`
+  will be truncated (logged as a warning).
+- Imports live in `data_snapshots_eodhd/`, separate from DoltHub and from
+  live collection.
+
+## Unusual Whales historical backtest (richest source, limited lookback)
+
+[Unusual Whales](https://api.unusualwhales.com/docs)' `/api/stock/{ticker}/
+option-chains?date=...&greeks=true` endpoint is a third historical-options
+source and the richest of the three: one call per symbol/day returns every
+contract's NBBO bid/ask, real volume, real open interest, implied
+volatility, and full greeks (delta/gamma/theta/vega/rho) — no per-contract
+or per-expiry follow-up calls, unlike EODHD. Verified end-to-end
+(`scripts/import_unusual_whales.py` → `scripts/backtest.py`) against live
+data: real candidates form and settle using the strategy's normal liquidity
+filters, no override config needed.
+
+```bash
+echo "UW_API_KEY=..." >> .env        # gitignored
+python scripts/import_unusual_whales.py --symbols SPY QQQ IWM \
+    --start 2026-04-07 --end 2026-08-14
+python scripts/backtest.py --snapshots-dir data_snapshots_uw
+```
+
+Caveats:
+
+- **Free-trial keys get a rolling historical access window** (observed as
+  90 trading days back from today, e.g. blocked before 2026-04-07 as of
+  this writing — the window moves forward with "today"). Querying an
+  earlier date 403s with `{"code": "historic_data_access_missing"}`;
+  `options_trader/data/unusual_whales.py` turns that into a typed
+  `HistoricalAccessError` and the importer skips the day (logged once)
+  rather than aborting the run. Full history needs emailing
+  dev@unusualwhales.com per the API's own error message.
+- EOD-ish snapshots (each `date` query reflects that day's NBBO/greeks/OI/
+  volume as of end of day), same hold-to-expiry assumption as the other
+  two imports.
+- No underlying spot price in the response — spot is joined from yfinance
+  daily closes, same `build_spot_lookup` shared across all three importers.
+- Auth is a bearer token (`Authorization: Bearer ...`), not a query param
+  like DoltHub/EODHD.
+- Imports live in `data_snapshots_uw/`, separate from DoltHub, EODHD, and
+  live collection.
+
 ## Credit strategies: put spreads and iron condors (premium selling)
 
 The debit-spread scanner above selects by a model-EV filter that scores the
