@@ -28,6 +28,7 @@ from options_trader.backtest.managed import (
     ManagedBacktestEngine, weekly_entry_days,
 )
 from options_trader.data.dolthub import DoltHubHistory, build_spot_lookup
+from options_trader.data.unusual_whales import UWHistory, load_api_key
 from options_trader.signals.credit import VALIDATED, VALIDATED_UNIVERSE, VARIANTS
 
 
@@ -44,11 +45,19 @@ def main() -> int:
                          "legacy = the original playbook parameters")
     ap.add_argument("--variants", nargs="+", default=None,
                     choices=list(VARIANTS) + list(VALIDATED))
-    ap.add_argument("--cache-dir", default="data_dolthub_cache")
+    ap.add_argument("--source", choices=["dolthub", "uw"], default="dolthub",
+                    help="dolthub = free, no QQQ/IWM, no volume/OI; "
+                         "uw = Unusual Whales, real volume/OI/greeks, "
+                         "trial keys have a rolling historical access window")
+    ap.add_argument("--cache-dir", default=None,
+                    help="Default: data_dolthub_cache or data_uw_cache, by --source")
     ap.add_argument("--out-dir", default="runs")
     ap.add_argument("--workers", type=int, default=4,
-                    help="Concurrent DoltHub fetches during prefetch")
+                    help="Concurrent history-source fetches during prefetch")
     args = ap.parse_args()
+    if args.cache_dir is None:
+        args.cache_dir = ("data_uw_cache" if args.source == "uw"
+                          else "data_dolthub_cache")
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -60,7 +69,14 @@ def main() -> int:
         args.symbols = (list(VALIDATED_UNIVERSE)
                         if args.variant_set == "validated"
                         else ["SPY", "XLF", "XLE"])
-    history = DoltHubHistory(cache_dir=args.cache_dir)
+    if args.source == "uw":
+        api_key = load_api_key("UW_API_KEY")
+        if not api_key:
+            print("UW_API_KEY not set (env or .env) — aborting.", file=sys.stderr)
+            return 1
+        history = UWHistory(api_key, cache_dir=args.cache_dir)
+    else:
+        history = DoltHubHistory(cache_dir=args.cache_dir)
     print(f"Building spot lookup from yfinance: {args.symbols} "
           f"{args.start}..{args.end}")
     # Spots must extend past `end` so positions entered near the end of the
@@ -76,7 +92,7 @@ def main() -> int:
         sym_days = sorted(d for (sym, d) in spots if sym == s)
         checkpoint_days.update(weekly_entry_days(sym_days))
     print(f"Prefetching {len(args.symbols) * len(checkpoint_days)} "
-          f"symbol-week day-chains from DoltHub (cached ones are free)...")
+          f"symbol-week day-chains from {args.source} (cached ones are free)...")
     history.prefetch(args.symbols, sorted(checkpoint_days),
                      workers=args.workers)
 

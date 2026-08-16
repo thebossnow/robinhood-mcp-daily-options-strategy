@@ -30,6 +30,7 @@ import logging
 import re
 import time
 from datetime import date as date_cls
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -43,6 +44,22 @@ API_BASE = "https://api.unusualwhales.com"
 REQUEST_PAUSE_S = 0.25
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def load_api_key(env_var: str) -> str:
+    """Read an API key from the environment, falling back to a `KEY=value`
+    line in a `.env` file at the repo root. Shared by both UW-backed scripts
+    (import_unusual_whales.py, backtest_credit.py --source uw)."""
+    import os
+    key = os.environ.get(env_var)
+    if key:
+        return key
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith(f"{env_var}="):
+                return line.split("=", 1)[1].strip()
+    return ""
 
 
 class HistoricalAccessError(RuntimeError):
@@ -161,3 +178,92 @@ def rows_to_snapshots(day: str, symbol: str, rows: list[dict],
             chain=chain,
         ))
     return snapshots
+
+
+DAY_CHAIN_COLUMNS = ["expiration", "type", "strike", "bid", "ask", "iv", "delta"]
+
+
+class UWHistory:
+    """Whole-day chain fetches for the managed credit backtest
+    (options_trader/backtest/managed.py), matching DoltHubHistory's
+    interface: `day_chains(symbol, day, max_dte) -> DataFrame` with columns
+    DAY_CHAIN_COLUMNS.
+
+    Unlike DoltHub, one UW call returns every expiration for the day in a
+    single response, so caching keys on (symbol, day) only — the same
+    cached fetch serves any max_dte the backtest asks for, filtered
+    client-side. Results are cached on disk (JSON per symbol/day), so
+    reruns and multi-variant sweeps never re-hit the API; `prefetch` warms
+    the cache concurrently.
+
+    Days outside the API key's historical access window (see
+    HistoricalAccessError) are treated as dataset gaps — logged once and
+    returned as an empty frame — matching how the engine already handles
+    DoltHub's unquoted-expiration gaps, rather than aborting the run.
+    """
+
+    def __init__(self, api_key: str, client: UWClient | None = None,
+                 cache_dir: str | Path = "data_uw_cache"):
+        self.client = client or UWClient(api_key)
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cached_fetch(self, symbol: str, day: str) -> list[dict] | None:
+        path = self.cache_dir / f"{symbol}_{day}.json"
+        if path.exists():
+            import json
+            return json.loads(path.read_text())
+        try:
+            rows = self.client.option_chains(symbol, day=day, greeks=True)
+        except HistoricalAccessError as exc:
+            logger.warning("%s %s: outside historical access window — %s",
+                           symbol, day, exc)
+            return None   # not cached: a wider access window later should retry
+        import json
+        path.write_text(json.dumps(rows))
+        return rows
+
+    def day_chains(self, symbol: str, day: str, max_dte: int = 50) -> pd.DataFrame:
+        """Every chain row quoted on `day` with expiration within max_dte.
+
+        Columns: DAY_CHAIN_COLUMNS. Returns an empty frame for days the
+        dataset doesn't cover (access-window gap or empty response).
+        """
+        symbol, day = _check_symbol(symbol), _check_date(day)
+        rows = self._cached_fetch(symbol, day)
+        if not rows:
+            return pd.DataFrame(columns=DAY_CHAIN_COLUMNS)
+        d = date_cls.fromisoformat(day)
+        hi = date_cls.fromordinal(d.toordinal() + max_dte).isoformat()
+        records = [{
+            "expiration": str(r["expires"])[:10],
+            "type": str(r["option_type"]).strip().lower(),
+            "strike": float(r["strike"]),
+            "bid": float(r["nbbo_bid"] or 0),
+            "ask": float(r["nbbo_ask"] or 0),
+            "iv": float(r["implied_volatility"] or 0),
+            "delta": float(r["delta"] or 0),
+        } for r in rows if day <= str(r["expires"])[:10] <= hi]
+        return pd.DataFrame(records, columns=DAY_CHAIN_COLUMNS)
+
+    def prefetch(self, symbols: list[str], days: list[str], max_dte: int = 50,
+                 workers: int = 4, progress_every: int = 25) -> None:
+        """Warm the cache for (symbol, day) pairs concurrently. Failures on
+        individual days are logged and skipped — the engine treats missing
+        days as dataset gaps."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        jobs = [(s, d) for s in symbols for d in days
+                if _SYMBOL_RE.match(s) and _DATE_RE.match(d)]
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(self.day_chains, s, d, max_dte): (s, d)
+                       for s, d in jobs}
+            for fut in as_completed(futures):
+                s, d = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    logger.warning("prefetch %s %s failed: %s", s, d, exc)
+                done += 1
+                if done % progress_every == 0:
+                    logger.info("prefetch: %d/%d day-chains", done, len(jobs))

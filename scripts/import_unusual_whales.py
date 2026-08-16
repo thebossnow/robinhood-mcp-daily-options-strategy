@@ -23,7 +23,6 @@ to the DoltHub and EODHD imports.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -31,20 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.data import SnapshotStore
 from options_trader.data.unusual_whales import (
-    HistoricalAccessError, UWImporter, build_spot_lookup, rows_to_snapshots,
+    HistoricalAccessError, UWImporter, build_spot_lookup, load_api_key,
+    rows_to_snapshots,
 )
-
-
-def _load_api_key() -> str:
-    key = os.environ.get("UW_API_KEY")
-    if key:
-        return key
-    env_path = Path(__file__).resolve().parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if line.startswith("UW_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    return ""
 
 
 def main() -> int:
@@ -58,7 +46,7 @@ def main() -> int:
                     help="Snapshot root (kept separate from live collection)")
     args = ap.parse_args()
 
-    api_key = _load_api_key()
+    api_key = load_api_key("UW_API_KEY")
     if not api_key:
         print("UW_API_KEY not set (env or .env) — aborting.", file=sys.stderr)
         return 1

@@ -6,9 +6,12 @@ import pytest
 
 from options_trader.config import StrategyConfig
 from options_trader.data.unusual_whales import (
+    DAY_CHAIN_COLUMNS,
     HistoricalAccessError,
     UWClient,
+    UWHistory,
     UWImporter,
+    load_api_key,
     rows_to_snapshots,
 )
 from options_trader.signals import generate_candidates
@@ -173,3 +176,66 @@ class TestClient:
         imp = UWImporter("key", client=client)
         with pytest.raises(HistoricalAccessError):
             imp.fetch_day("SPY", "2020-01-01")
+
+
+class TestHistory:
+    def _row(self, exp="2026-06-05", opt_type="call", strike=100.0,
+             bid=1.5, ask=1.6, iv=0.4, delta=0.3):
+        return {"expires": exp, "option_type": opt_type, "strike": strike,
+                "nbbo_bid": bid, "nbbo_ask": ask, "implied_volatility": iv,
+                "delta": delta, "volume": 10, "open_interest": 100}
+
+    def test_day_chains_shape_and_columns(self, tmp_path):
+        client = mock.Mock()
+        client.option_chains.return_value = [self._row()]
+        h = UWHistory("key", client=client, cache_dir=tmp_path)
+        df = h.day_chains("SPY", "2026-06-01", max_dte=10)
+        assert list(df.columns) == DAY_CHAIN_COLUMNS
+        assert len(df) == 1
+        assert df.iloc[0]["type"] == "call" and df.iloc[0]["strike"] == 100.0
+
+    def test_day_chains_filters_by_max_dte(self, tmp_path):
+        client = mock.Mock()
+        client.option_chains.return_value = [
+            self._row(exp="2026-06-05"),   # within window
+            self._row(exp="2026-06-20"),   # outside window
+        ]
+        h = UWHistory("key", client=client, cache_dir=tmp_path)
+        df = h.day_chains("SPY", "2026-06-01", max_dte=7)
+        assert list(df["expiration"]) == ["2026-06-05"]
+
+    def test_second_call_hits_disk_cache_not_api(self, tmp_path):
+        client = mock.Mock()
+        client.option_chains.return_value = [self._row()]
+        h = UWHistory("key", client=client, cache_dir=tmp_path)
+        h.day_chains("SPY", "2026-06-01")
+        h.day_chains("SPY", "2026-06-01", max_dte=3)   # different max_dte, same cache
+        assert client.option_chains.call_count == 1
+
+    def test_historical_access_error_returns_empty_frame_uncached(self, tmp_path):
+        client = mock.Mock()
+        client.option_chains.side_effect = HistoricalAccessError("too old")
+        h = UWHistory("key", client=client, cache_dir=tmp_path)
+        df = h.day_chains("SPY", "2020-01-01")
+        assert df.empty
+        assert list(df.columns) == DAY_CHAIN_COLUMNS
+        # Not cached: a later call (e.g. after the window rolls forward) retries
+        h.day_chains("SPY", "2020-01-01")
+        assert client.option_chains.call_count == 2
+
+    def test_prefetch_warms_cache_for_all_symbol_days(self, tmp_path):
+        client = mock.Mock()
+        client.option_chains.return_value = [self._row()]
+        h = UWHistory("key", client=client, cache_dir=tmp_path)
+        h.prefetch(["SPY", "QQQ"], ["2026-06-01", "2026-06-08"], workers=2)
+        assert client.option_chains.call_count == 4
+
+
+class TestLoadApiKey:
+    def test_reads_from_env(self, monkeypatch):
+        monkeypatch.setenv("SOME_TEST_KEY", "from-env")
+        assert load_api_key("SOME_TEST_KEY") == "from-env"
+
+    def test_missing_returns_empty_string(self, monkeypatch):
+        monkeypatch.delenv("SOME_TEST_KEY_NOT_SET_ANYWHERE", raising=False)
+        assert load_api_key("SOME_TEST_KEY_NOT_SET_ANYWHERE") == ""

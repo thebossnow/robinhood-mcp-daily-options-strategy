@@ -11,6 +11,7 @@ data_dolthub_cache/
 data_snapshots_eodhd/
 data_eodhd_cache/
 data_snapshots_uw/
+data_uw_cache/
 
 # runtime logs
 logs/
