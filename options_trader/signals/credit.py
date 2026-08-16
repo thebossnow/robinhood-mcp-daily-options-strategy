@@ -152,6 +152,31 @@ VARIANTS: dict[str, CreditVariantConfig] = {
     "condor_asym": CreditVariantConfig(
         name="condor_asym", short_put_delta=0.20, short_call_delta=0.12,
     ),
+    # Same-day / next-day expiration, theta-harvest condor. NOTE: the
+    # backtest engine's cadence is weekly (see managed.py) — the next
+    # checkpoint after entry is ~5 trading days later, by which point a
+    # 0-1 DTE position has always already expired. So profit_take/breach/
+    # time_exit never actually fire for this variant: every trade is
+    # force-settled at real intrinsic value on the real expiration date
+    # (via the daily spot lookup), i.e. this measures "sell 0DTE premium,
+    # hold to expiry, no intraday management" rather than a managed book.
+    "condor_0dte": CreditVariantConfig(
+        name="condor_0dte", short_put_delta=0.15, short_call_delta=0.15,
+        wing_width_frac=0.01, min_credit_frac=0.01, min_short_bid=0.02,
+        exit_on_breach=False, min_dte=0, max_dte=1, target_dte=0,
+    ),
+    # Single-leg decomposition of condor15/spy_condor15 (VALIDATED): same
+    # delta/wing/DTE/breach params, put and call sides isolated. Answers
+    # "which leg drove spy_condor15's SPY/QQQ losses" — the README's condor
+    # decomposition only ever measured the two legs bundled together.
+    "put_spread_15": CreditVariantConfig(
+        name="put_spread_15", short_put_delta=0.15, short_call_delta=None,
+        wing_width_frac=0.04, min_credit_frac=0.03, exit_on_breach=False,
+    ),
+    "call_spread_15": CreditVariantConfig(
+        name="call_spread_15", short_put_delta=None, short_call_delta=0.15,
+        wing_width_frac=0.04, min_credit_frac=0.03, exit_on_breach=False,
+    ),
 }
 
 
