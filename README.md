@@ -135,6 +135,28 @@ separate from the consecutive-loss kill switch above — that catches a losing
 streak; this catches the model's predictions quietly decoupling from reality
 while the streak still looks fine.
 
+## Settlement-price provider
+
+`backtest.py`, `paper_trade.py settle`, and the loop verifier need a daily
+close to settle expired trades. Default is yfinance (free, no key). If
+yfinance's endpoint is unreachable (e.g. a sandboxed network policy that
+blocks Yahoo Finance), pass `--price-provider alphavantage` with a free
+[Alpha Vantage API key](https://www.alphavantage.co/support/#api-key) set as
+`ALPHA_VANTAGE_API_KEY`:
+
+```bash
+export ALPHA_VANTAGE_API_KEY=your_free_key
+python scripts/backtest.py --price-provider alphavantage
+python scripts/paper_trade.py --price-provider alphavantage settle
+PRICE_PROVIDER=alphavantage python loop/evaluate.py
+```
+
+This is a settlement-price fallback only — Alpha Vantage's free tier does
+not include option chains (`HISTORICAL_OPTIONS`/`REALTIME_OPTIONS` return a
+"premium endpoint" error on a free key), so chain data for scanning and
+backtesting still comes from yfinance, the Robinhood MCP provider, or
+DoltHub. See `options_trader/data/alphavantage.py`.
+
 ## Daily workflow
 
 ```bash

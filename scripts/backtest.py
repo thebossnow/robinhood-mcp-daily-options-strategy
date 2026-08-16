@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from options_trader.backtest import BacktestEngine
 from options_trader.config import StrategyConfig
-from options_trader.data import SnapshotStore, YFinanceProvider
+from options_trader.data import SETTLEMENT_PROVIDERS, SnapshotStore, get_settlement_provider
 
 
 def main() -> int:
@@ -33,6 +33,11 @@ def main() -> int:
     ap.add_argument("--config", help="Path to StrategyConfig JSON")
     ap.add_argument("--snapshots-dir", default="data_snapshots")
     ap.add_argument("--per-snapshot-trades", type=int, default=1)
+    ap.add_argument("--price-provider", choices=SETTLEMENT_PROVIDERS,
+                    default="yfinance",
+                    help="Settlement-close source (default yfinance; "
+                         "alphavantage needs ALPHA_VANTAGE_API_KEY, free "
+                         "tier — see options_trader/data/alphavantage.py)")
     ap.add_argument("--save-trades", metavar="PATH",
                     help="Write settled trades + summary to a JSON file "
                          "(input for scripts/calibrate.py)")
@@ -46,7 +51,7 @@ def main() -> int:
         return 1
     print(f"Loaded {len(snaps)} snapshots.")
 
-    provider = YFinanceProvider()
+    provider = get_settlement_provider(args.price_provider)
     settlements: dict[tuple[str, str], float] = {}
     for snap in snaps:
         key = (snap.underlying, snap.expiration)

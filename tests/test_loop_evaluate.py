@@ -1,5 +1,7 @@
 """Tests for the autoresearch-loop verifier and the intraday snapshot fix."""
 
+from unittest import mock
+
 import pandas as pd
 import pytest
 
@@ -7,6 +9,7 @@ from loop.evaluate import (
     MIN_SCAN_DAYS,
     MIN_SETTLED_TRADES,
     Verdict,
+    _fetch_settlements,
     data_readiness,
     decide,
     dedupe_daily,
@@ -81,6 +84,27 @@ class TestSnapshotHygiene:
         store.save(_snap("2026-07-09", "10:30:00"))
         assert len(list(tmp_path.rglob("*.csv"))) == 2
         assert len(store.load_all()) == 2
+
+
+class TestFetchSettlements:
+    def test_uses_requested_provider(self):
+        snap = _snap("2026-07-09")
+        fake_provider = mock.Mock()
+        fake_provider.get_settlement_close.return_value = 101.5
+        with mock.patch("options_trader.data.get_settlement_provider",
+                        return_value=fake_provider) as factory:
+            settlements = _fetch_settlements([snap], provider_name="alphavantage")
+        factory.assert_called_once_with("alphavantage")
+        assert settlements[("SPY", "2026-08-21")] == 101.5
+
+    def test_fetch_failure_is_skipped_not_raised(self):
+        snap = _snap("2026-07-09")
+        fake_provider = mock.Mock()
+        fake_provider.get_settlement_close.side_effect = RuntimeError("boom")
+        with mock.patch("options_trader.data.get_settlement_provider",
+                        return_value=fake_provider):
+            settlements = _fetch_settlements([snap])
+        assert settlements == {}
 
 
 def _metrics(trades=50, exp=10.0, dd=-100.0):

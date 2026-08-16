@@ -21,6 +21,7 @@ Run standalone for a dry-run report on the current config and dataset:
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -232,9 +233,10 @@ def evaluate(candidate_cfg: StrategyConfig, baseline_cfg: StrategyConfig,
     )
 
 
-def _fetch_settlements(snapshots: list[ChainSnapshot]) -> dict:
-    from options_trader.data import YFinanceProvider
-    provider = YFinanceProvider()
+def _fetch_settlements(snapshots: list[ChainSnapshot],
+                       provider_name: str = "yfinance") -> dict:
+    from options_trader.data import get_settlement_provider
+    provider = get_settlement_provider(provider_name)
     settlements: dict[tuple[str, str], float] = {}
     for snap in snapshots:
         key = (snap.underlying, snap.expiration)
@@ -265,7 +267,8 @@ def main() -> int:
         print("NOT READY: keep collecting snapshots before any loop evaluation.")
 
     cfg = StrategyConfig()
-    settlements = _fetch_settlements(snapshots)
+    provider_name = os.environ.get("PRICE_PROVIDER", "yfinance")
+    settlements = _fetch_settlements(snapshots, provider_name)
     train, oos = split_walk_forward(snapshots)
     print(f"\nWalk-forward split: {len(scan_days(train))} train days / "
           f"{len(scan_days(oos))} OOS days")
