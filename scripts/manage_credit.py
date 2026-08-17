@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from options_trader.config import StrategyConfig
 from options_trader.execution.paper import PaperBroker
 from options_trader.journal import Journal
+from options_trader.risk.vol_regime import fetch_vix_closes
 from options_trader.signals.credit import VALIDATED, CreditVariantConfig
 
 
@@ -116,7 +117,15 @@ def main() -> int:
         provider = YFinanceProvider()
 
     journal = Journal(args.journal)
-    broker = PaperBroker(cfg, journal)
+    # This script only closes/settles positions (risk.check() is never
+    # called from that path — see close_credit/settle_expired_credit in
+    # execution/paper.py), so the vol gate is currently a no-op here.
+    # Wired anyway for consistency with scan_credit.py/paper_trade.py and
+    # so a future roll/reopen path doesn't silently skip it.
+    broker = PaperBroker(
+        cfg, journal,
+        vix_provider=lambda: fetch_vix_closes(cfg.vix_spike_lookback_days),
+    )
     today = date.today()
 
     open_positions = journal.open_credit_positions()

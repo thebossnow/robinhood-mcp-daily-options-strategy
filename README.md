@@ -105,9 +105,11 @@ over `vix_spike_lookback_days` (default 5) trading days, which catches a
 regime change in progress before the absolute level crosses the ceiling.
 It fails **closed**: if VIX data can't be fetched, new entries are refused
 rather than allowed — silently trading through a data outage is worse than
-being occasionally too cautious. Wired into `scan_credit.py` and
-`paper_trade.py` (the two entry points); `manage_credit.py` only closes
-positions, so it's intentionally not gated. Thresholds are sanity-checked
+being occasionally too cautious. Wired into `scan_credit.py`,
+`paper_trade.py`, and `manage_credit.py` (the last only closes/settles
+positions today, never opens, so the gate is currently a no-op there —
+wired anyway for consistency and so a future roll/reopen path doesn't
+silently skip it). Thresholds are sanity-checked
 against this repo's own delta/DTE sweep window (2026-04-07..08-15, VIX
 14.25-25.78, max 5-day spike +40%): the level ceiling never would have
 falsely blocked that window's trades, and the spike trigger is reachable
