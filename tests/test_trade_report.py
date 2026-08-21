@@ -115,22 +115,48 @@ class TestCreditReport:
         assert "3 events" in rep.render()
         assert "premium does not cover" in rep.render()
 
-    def test_model_inferred_delta_is_not_a_confirmation(self):
-        # No delta column: strikes are still selectable (build_position
-        # falls back to Black-Scholes off the leg's IV), but the market
-        # never quoted a delta, so the framework's "confirm the delta
-        # before selling" step did not happen and the report says so.
+    def _no_delta_column(self, **over):
+        # Neither production provider publishes a delta column, so this is
+        # the LIVE case, not an edge case: build_position falls back to a
+        # Black-Scholes delta off the leg's IV.
         chain = _chain().drop(columns=["delta"])
+        for k, v in over.items():
+            chain[k] = v
         cfg = CreditVariantConfig(name="t", short_put_delta=0.22,
                                   short_call_delta=None,
                                   wing_width_frac=0.02, min_credit_frac=0.0)
         pos = build_position(chain, SPOT, "SPY", "2026-08-24", "2026-10-02",
                              39, cfg)
+        if pos is None:
+            return None
         sizing = size_position(25_000.0, spread_capital_at_risk(
             max(pos.widths().values()), pos.credit))
-        rep = report_credit_position(pos, sizing, 25_000.0, "put_credit_spread")
-        assert not rep.confirmation.confirmed
-        assert "NOT CONFIRMED" in rep.render()
+        return report_credit_position(pos, sizing, 25_000.0,
+                                      "put_credit_spread")
+
+    def test_model_delta_confirms_but_is_labelled_as_model(self):
+        rep = self._no_delta_column()
+        assert rep.confirmation.confirmed
+        assert rep.confirmation.delta_source == "model"
+        assert "model-derived" in rep.render()
+        assert "NOT CONFIRMED" not in rep.render()
+
+    def test_chain_delta_is_labelled_as_chain(self):
+        _, _, rep = self._report()
+        assert rep.confirmation.delta_source == "chain"
+        assert "chain-quoted" in rep.render()
+
+    def test_the_model_delta_is_signed_like_a_put(self):
+        rep = self._no_delta_column()
+        assert rep.confirmation.short_delta < 0
+
+    def test_a_chain_with_no_iv_cannot_be_confirmed_at_all(self):
+        # No delta column AND no IV: no strike is selectable, because the
+        # model has nothing to compute a delta from either.
+        assert self._no_delta_column(iv=0.0) is None
+
+    def test_delta_source_reaches_the_dict(self):
+        assert self._no_delta_column().to_dict()["delta_source"] == "model"
 
 
 class TestCSPReport:

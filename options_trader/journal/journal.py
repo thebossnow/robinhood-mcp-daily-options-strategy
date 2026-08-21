@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+# Books whose entry_debit holds a CREDIT received rather than a debit paid,
+# so record_exit must flip the P&L sign. Adding a book here is what makes
+# its P&L come out right; forgetting to is a sign inversion, not an error.
+CREDIT_STRATEGIES = frozenset({"credit", "income"})
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,12 +130,21 @@ class Journal:
         return int(cur.lastrowid)
 
     def record_credit_entry(self, position: dict, contracts: int,
-                            notes: str = "") -> int:
+                            notes: str = "", strategy: str = "credit") -> int:
         """Record a premium-selling position (put credit spread or iron
         condor) built by signals/credit.py. `position` is
         CreditPosition.to_dict(): entry_debit stores the per-share CREDIT
-        received (after slippage); record_exit flips the P&L sign for
-        strategy='credit' rows."""
+        received (after slippage); record_exit flips the P&L sign for every
+        strategy in CREDIT_STRATEGIES.
+
+        `strategy` tags which BOOK the position belongs to. Both books hold
+        credit structures and share this table, but they are managed by
+        different scripts on different cron lines with different variant
+        registries — so a position must be answerable to exactly one of
+        them. Tagging is what keeps `open_credit_positions()` from handing
+        the income book to manage_credit.py, which would manage it with
+        VALIDATED's parameters before manage_income.py ever saw it.
+        """
         legs = position["legs"]
         widths: dict[str, float] = {}
         for opt_type in ("put", "call"):
@@ -163,7 +177,7 @@ class Journal:
                 credit * 100.0 * contracts,
                 json.dumps(position),
                 notes,
-                "credit",
+                strategy,
                 json.dumps(legs),
             ),
         )
@@ -177,7 +191,7 @@ class Journal:
             raise KeyError(f"No trade with id {trade_id}")
         if row["status"] != "open":
             raise ValueError(f"Trade {trade_id} is already {row['status']}")
-        if row["strategy"] == "credit":
+        if row["strategy"] in CREDIT_STRATEGIES:
             # entry_debit holds the credit received; exit_value is the cost
             # paid to close (or intrinsic at settlement).
             pnl = (row["entry_debit"] - exit_value) * 100.0 * row["contracts"]
@@ -212,11 +226,27 @@ class Journal:
         ).fetchall()
         return [_to_record(r) for r in rows]
 
-    def open_credit_positions(self) -> list[TradeRecord]:
-        rows = self._conn.execute(
-            "SELECT * FROM trades WHERE status='open' AND strategy='credit' "
-            "ORDER BY opened_at"
-        ).fetchall()
+    def open_credit_positions(self,
+                              strategy: str | None = "credit") -> list[TradeRecord]:
+        """Open premium-selling positions in one book.
+
+        Defaults to 'credit' so existing callers keep the rows they always
+        got. Pass another tag for a different book, or None for every
+        credit-like book at once (portfolio-level views; never for
+        management, which must not touch another script's positions).
+        """
+        if strategy is None:
+            marks = ",".join("?" * len(CREDIT_STRATEGIES))
+            rows = self._conn.execute(
+                f"SELECT * FROM trades WHERE status='open' AND "
+                f"strategy IN ({marks}) ORDER BY opened_at",
+                tuple(sorted(CREDIT_STRATEGIES)),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM trades WHERE status='open' AND strategy=? "
+                "ORDER BY opened_at", (strategy,),
+            ).fetchall()
         return [_to_record(r) for r in rows]
 
     def closed_trades(self) -> list[TradeRecord]:

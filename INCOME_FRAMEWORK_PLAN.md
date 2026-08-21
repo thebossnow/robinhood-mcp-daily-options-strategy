@@ -47,9 +47,35 @@ the module docstring with the specific finding it rests on.
 | cron wiring | `scripts/income_*.sh`, `crontab.txt` | done |
 | **backtest of the two profiles** | — | **not done, see below** |
 
-Total: 459 tests pass (272 pre-existing, 187 new).
+Total: 476 tests pass (272 pre-existing, 204 new).
 
-One pre-existing bug was found and fixed on the way:
+Three bugs were found by review after the first push and fixed:
+
+1. **Both books shared one query.** Income entries were journaled with
+   `strategy='credit'`, so `open_credit_positions()` handed them to
+   `manage_credit.py` — which would manage them at 12:45 with `VALIDATED`
+   parameters (or bare defaults) before `manage_income.py` saw them at
+   12:50. Entries are now tagged `income` and each script reads its own
+   book. The trap in that fix: `record_exit` flips the P&L sign only for
+   credit-like strategies, so a new tag missing from `CREDIT_STRATEGIES`
+   would have inverted every income P&L silently. It is in the set, and a
+   test pins it.
+2. **The IV/delta confirmation was decorative.** Neither production
+   provider publishes a `delta` column, so every live report read
+   `NOT CONFIRMED` — and the scanner opened the position anyway,
+   contradicting its own documented rule. Two changes: `build_position`
+   now records the Black-Scholes delta it already computes for strike
+   selection, labelled `model` vs `chain`, and the scanner refuses any
+   candidate whose confirmation fails. The earlier design treated a model
+   delta as *not* a confirmation, which made the gate unsatisfiable on
+   every real chain — the same unsatisfiable-rule failure this project
+   criticized in the framework's event rule, committed in our own code.
+3. **The IV-spike grading could never escalate.** Same root cause: with no
+   delta available, `assess()` could only ever reach WATCH, so DEFEND and
+   CLOSE were unreachable outside tests. The short leg's delta is now
+   modelled from its live IV when the chain omits it.
+
+One pre-existing bug was also found on the way:
 `scripts/manage_credit.py`'s `manage_position` resolved variant parameters
 from `VALIDATED` only, so any variant outside that registry silently
 inherited `CreditVariantConfig`'s defaults — a 4-DTE weekly would take the

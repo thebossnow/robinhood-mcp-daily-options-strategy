@@ -137,57 +137,58 @@ class TestShortLegQuote:
         from scripts.manage_income import short_leg_quote
         legs = [{"type": "put", "strike": 650.0, "side": -1},
                 {"type": "call", "strike": 720.0, "side": -1}]
-        iv, delta = short_leg_quote(legs, _chain(put_iv=0.40, put_delta=-0.45))
+        iv, delta = short_leg_quote(legs, _chain(put_iv=0.40, put_delta=-0.45), 690.0, 39)
         assert iv == pytest.approx(0.40) and delta == pytest.approx(0.45)
 
     def test_falls_back_to_the_call_side(self):
         from scripts.manage_income import short_leg_quote
         legs = [{"type": "call", "strike": 720.0, "side": -1}]
-        iv, delta = short_leg_quote(legs, _chain())
+        iv, delta = short_leg_quote(legs, _chain(), 690.0, 39)
         assert iv == pytest.approx(0.16)
 
     def test_missing_strike_yields_nothing(self):
         from scripts.manage_income import short_leg_quote
         legs = [{"type": "put", "strike": 999.0, "side": -1}]
-        assert short_leg_quote(legs, _chain()) == (None, None)
+        assert short_leg_quote(legs, _chain(), 690.0, 39) == (None, None)
 
     def test_zero_iv_and_delta_read_as_absent(self):
         from scripts.manage_income import short_leg_quote
         legs = [{"type": "put", "strike": 650.0, "side": -1}]
-        assert short_leg_quote(legs, _chain(put_iv=0.0, put_delta=0.0)) == \
-            (None, None)
+        assert short_leg_quote(legs, _chain(put_iv=0.0, put_delta=0.0),
+                               690.0, 39) == (None, None)
 
 
 class TestGrading:
     def test_quiet_position_produces_no_line(self, tmp_path):
         from scripts.manage_income import grade_position
         j, rec = _open(tmp_path, _condor())
-        assert grade_position(rec, j, _chain(), IVSpikeConfig()) is None
+        assert grade_position(rec, j, _chain(), IVSpikeConfig(), 690.0, 39) is None
 
     def test_spike_with_a_safe_strike_watches(self, tmp_path):
         from scripts.manage_income import grade_position
         j, rec = _open(tmp_path, _condor(entry_iv=0.15))
         line = grade_position(rec, j, _chain(put_iv=0.40, put_delta=-0.20),
-                              IVSpikeConfig())
+                              IVSpikeConfig(), 690.0, 39)
         assert "WATCH" in line
 
     def test_spike_with_a_threatened_strike_defends(self, tmp_path):
         from scripts.manage_income import grade_position
         j, rec = _open(tmp_path, _condor(entry_iv=0.15))
         line = grade_position(rec, j, _chain(put_iv=0.40, put_delta=-0.45),
-                              IVSpikeConfig())
+                              IVSpikeConfig(), 690.0, 39)
         assert "DEFEND" in line
 
     def test_no_entry_iv_cannot_be_graded(self, tmp_path):
         from scripts.manage_income import grade_position
         j, rec = _open(tmp_path, _condor(entry_iv=0.0))
-        assert grade_position(rec, j, _chain(put_iv=0.40), IVSpikeConfig()) is None
+        assert grade_position(rec, j, _chain(put_iv=0.40), IVSpikeConfig(),
+                              690.0, 39) is None
 
     def test_unquoted_leg_cannot_be_graded(self, tmp_path):
         from scripts.manage_income import grade_position
         j, rec = _open(tmp_path, _condor())
         bare = _chain().drop(columns=["iv"]).assign(iv=0.0)
-        assert grade_position(rec, j, bare, IVSpikeConfig()) is None
+        assert grade_position(rec, j, bare, IVSpikeConfig(), 690.0, 39) is None
 
 
 class TestEntryShortIV:
@@ -263,13 +264,18 @@ class TestScanEndToEnd:
         return pd.DataFrame(rows)
 
     def _run(self, tmp_path, capsys, today=None, profile="evidence_adjusted",
-             vix=None, extra=()):
+             vix=None, extra=(), drop_delta=False, zero_iv=False):
         import sys
         from unittest import mock
         import scripts.scan_income as si
 
         today = today or self.MONDAY
         chain = self._chain()
+        if drop_delta:
+            # What both production providers actually hand over.
+            chain = chain.drop(columns=["delta"])
+        if zero_iv:
+            chain = chain.assign(iv=0.0)
 
         class FakeProvider:
             def get_expirations(self, u):
@@ -371,3 +377,122 @@ class TestScanEndToEnd:
         assert risks
         cap = 0.20 * 75_000.0
         assert sum(risks) <= cap
+
+
+class TestBooksAreSeparate:
+    """Income and credit positions share one table and one journal file but
+    are managed by different scripts with different variant registries, so
+    each script must see only its own book."""
+
+    def _one_of_each(self, tmp_path):
+        j = Journal(tmp_path / "j.db")
+        j.record_credit_entry(_condor(variant="spy_condor15").to_dict(), 1,
+                              strategy="credit")
+        j.record_credit_entry(_condor(variant="income_condor15").to_dict(), 1,
+                              strategy="income")
+        return j
+
+    def test_credit_management_does_not_see_income_positions(self, tmp_path):
+        j = self._one_of_each(tmp_path)
+        kinds = [r.kind for r in j.open_credit_positions()]
+        assert kinds == ["spy_condor15"]
+
+    def test_income_management_does_not_see_credit_positions(self, tmp_path):
+        j = self._one_of_each(tmp_path)
+        kinds = [r.kind for r in j.open_credit_positions("income")]
+        assert kinds == ["income_condor15"]
+
+    def test_none_returns_every_credit_like_book(self, tmp_path):
+        j = self._one_of_each(tmp_path)
+        assert len(j.open_credit_positions(None)) == 2
+
+    def test_the_default_tag_is_unchanged_for_existing_callers(self, tmp_path):
+        j = Journal(tmp_path / "j.db")
+        tid = j.record_credit_entry(_condor().to_dict(), 1)
+        assert j.get(tid).strategy == "credit"
+
+    def test_income_pnl_keeps_the_credit_sign_convention(self, tmp_path):
+        """The trap in tagging a second book: record_exit flips the sign
+        only for credit-like strategies. A new tag missing from
+        CREDIT_STRATEGIES would invert every income P&L silently."""
+        from options_trader.journal.journal import CREDIT_STRATEGIES
+        assert "income" in CREDIT_STRATEGIES
+
+        j = Journal(tmp_path / "j.db")
+        pos = _condor(variant="income_condor15")
+        tid = j.record_credit_entry(pos.to_dict(), 1, strategy="income")
+        # Bought back for less than the credit received -> a WIN.
+        closed = j.record_exit(tid, pos.credit / 2.0)
+        assert closed.realized_pnl > 0
+
+    def test_stats_are_reported_per_book(self, tmp_path):
+        j = self._one_of_each(tmp_path)
+        j.record_exit(1, 1.0)
+        assert j.stats(strategy="credit")["closed_trades"] == 1
+        assert j.stats(strategy="income")["closed_trades"] == 0
+
+
+class TestGradingWithoutAQuotedDelta:
+    """Neither production provider publishes a delta column, so the whole
+    delta-driven half of the grading has to work off a modelled delta or it
+    is dead code outside tests."""
+
+    def _bare(self, put_iv):
+        return _chain(put_iv=put_iv).drop(columns=["delta"])
+
+    def test_a_modelled_delta_is_produced(self):
+        from scripts.manage_income import short_leg_quote
+        legs = [{"type": "put", "strike": 650.0, "side": -1}]
+        iv, delta = short_leg_quote(legs, self._bare(0.18), 690.0, 39)
+        assert iv == pytest.approx(0.18)
+        assert delta is not None and 0.0 < delta < 0.5
+
+    def test_a_threatened_strike_still_reaches_defend(self, tmp_path):
+        from scripts.manage_income import grade_position
+        j, rec = _open(tmp_path, _condor(entry_iv=0.15))
+        # Spot at the short strike and IV way up: delta ~0.5, ratio ~2.7x.
+        line = grade_position(rec, j, self._bare(0.40), IVSpikeConfig(),
+                              650.0, 39)
+        assert line is not None and ("DEFEND" in line or "CLOSE" in line)
+
+    def test_a_safe_strike_still_only_watches(self, tmp_path):
+        from scripts.manage_income import grade_position
+        j, rec = _open(tmp_path, _condor(entry_iv=0.15))
+        line = grade_position(rec, j, self._bare(0.40), IVSpikeConfig(),
+                              780.0, 39)
+        assert "WATCH" in line
+
+    def test_an_expired_position_cannot_be_modelled(self):
+        from scripts.manage_income import short_leg_quote
+        legs = [{"type": "put", "strike": 650.0, "side": -1}]
+        assert short_leg_quote(legs, self._bare(0.18), 690.0, 0)[1] is None
+
+
+class TestConfirmationIsEnforced:
+    """The scanner must refuse an unconfirmed candidate, not just print
+    NOT CONFIRMED above an opened position."""
+
+    def test_a_production_shaped_chain_confirms_via_the_model(
+            self, tmp_path, capsys):
+        _, out = TestScanEndToEnd()._run(tmp_path, capsys, drop_delta=True)
+        assert "model-derived" in out
+        assert "NOT CONFIRMED" not in out
+        assert "risk percentage" in out
+
+    def test_no_delta_and_no_iv_produces_no_candidate_at_all(
+            self, tmp_path, capsys):
+        # With neither, no strike is selectable: the refusal comes from
+        # build_position, one gate earlier than the confirmation check.
+        _, out = TestScanEndToEnd()._run(tmp_path, capsys, drop_delta=True,
+                                         zero_iv=True)
+        assert "NO QUALIFYING TRADE" in out
+        assert "risk percentage" not in out
+
+    def test_an_unconfirmed_report_is_refused_and_journaled(self):
+        """The check itself, isolated from chain construction — a report
+        whose confirmation failed must never reach open_credit."""
+        from options_trader.reporting import ConfirmationLine
+        bad = ConfirmationLine(725.0, None, 0.18, delta_source="none")
+        assert not bad.confirmed
+        assert "NOT CONFIRMED" in bad.render()
+        assert "cannot measure" in bad.render()

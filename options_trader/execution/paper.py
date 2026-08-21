@@ -116,8 +116,14 @@ class PaperBroker:
     # caller (manage_credit.py), matching the backtest's fill model.
 
     def open_credit(self, pos: CreditPosition, contracts: int = 1,
-                    notes: str = "") -> tuple[int | None, RiskCheck]:
-        """Returns (trade_id, risk_check). trade_id is None if refused."""
+                    notes: str = "",
+                    strategy: str = "credit") -> tuple[int | None, RiskCheck]:
+        """Returns (trade_id, risk_check). trade_id is None if refused.
+
+        `strategy` tags the book (see Journal.record_credit_entry); it must
+        match what that book's management script reads back, or the
+        position is managed by the wrong script or by none at all.
+        """
         check = self.risk.check(pos.max_loss * 100.0)
         if not check.allowed:
             return None, check
@@ -125,6 +131,7 @@ class PaperBroker:
         trade_id = self.journal.record_credit_entry(
             pos.to_dict(), contracts,
             notes=notes or "paper credit entry (mid credit - slippage)",
+            strategy=strategy,
         )
         return trade_id, check
 

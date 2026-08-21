@@ -53,6 +53,9 @@ from options_trader.signals.income import DEFAULT_PROFILE, PROFILES, get_profile
 from options_trader.signals.iv_rank import atm_iv, build_iv_history, read_iv_rank
 
 IV_HISTORY_PATH = "data_iv_history.json"
+# Journal book tag. Keeps manage_credit.py from picking up income
+# positions and managing them with the wrong variant registry.
+INCOME_STRATEGY = "income"
 
 
 def load_iv_history(path: str) -> dict[str, float]:
@@ -89,7 +92,7 @@ def pick_expiration(expirations: list[str], today: date, min_dte: int,
 def _journal_skip(journal, msg: str, dry_run: bool) -> None:
     print(msg)
     if not dry_run:
-        journal.log_no_trade(msg, strategy="income")
+        journal.log_no_trade(msg, strategy=INCOME_STRATEGY)
 
 
 def main() -> int:
@@ -151,7 +154,12 @@ def main() -> int:
 
     underlying = cfg.underlyings[0]
     expirations = provider.get_expirations(underlying)
-    open_kinds = {(r.kind, r.expiration) for r in journal.open_credit_positions()}
+    # Scoped to the income book: the credit book is a different script's
+    # responsibility and its open positions must not suppress an income
+    # entry (nor vice versa). Heat, by contrast, is account-wide on purpose
+    # — capital is shared even when management is not.
+    open_kinds = {(r.kind, r.expiration)
+                  for r in journal.open_credit_positions(INCOME_STRATEGY)}
     open_capital = journal.open_risk()
     chain_cache: dict[str, object] = {}
     opened = 0
@@ -238,6 +246,18 @@ def main() -> int:
         print()
         print(report.render())
 
+        # The documented rule, enforced rather than merely printed: an
+        # unconfirmed candidate is one whose delta or IV could not be
+        # established from the chain OR the model, so nothing downstream
+        # knows what it is selling. INCOME_AGENT_PROMPT.md tells the
+        # operator this trade does not happen; before this check, the
+        # scanner opened it anyway.
+        if not report.confirmation.confirmed:
+            _journal_skip(journal, f"{name}: NO QUALIFYING TRADE — IV/delta "
+                          f"not confirmed: {report.confirmation.render()}",
+                          args.dry_run)
+            continue
+
         if args.dry_run:
             # Consume the heat budget anyway, so a dry run reports the same
             # contract counts a real run would. Without this the second and
@@ -246,7 +266,8 @@ def main() -> int:
             open_capital += sizing.total_capital_at_risk
             continue
         trade_id, check = broker.open_credit(pos, contracts=sizing.contracts,
-                                             notes=f"income entry {name}")
+                                             notes=f"income entry {name}",
+                                             strategy=INCOME_STRATEGY)
         if trade_id is None:
             _journal_skip(journal, f"{name}: risk manager refused — "
                           f"{'; '.join(check.reasons)}", False)
@@ -265,7 +286,7 @@ def main() -> int:
               f"tier budget at any equity this schedule targets)")
 
     print(f"\nscan complete: {opened} entry/entries. "
-          f"Journal stats: {journal.stats(strategy='income')}")
+          f"Journal stats: {journal.stats(strategy=INCOME_STRATEGY)}")
     return 0
 
 
@@ -301,6 +322,11 @@ def _scan_csp(profile, cfg, equity, underlying, expirations, today,
     report = report_csp_position(pos, sizing, equity)
     print()
     print(report.render())
+    if not report.confirmation.confirmed:
+        _journal_skip(journal, f"{ccfg.name}: NO QUALIFYING TRADE — IV/delta "
+                      f"not confirmed: {report.confirmation.render()}",
+                      args.dry_run)
+        return 0
     print("  (cash-secured puts are journaled as reports only — the paper "
           "broker models defined-risk structures)")
     return 0

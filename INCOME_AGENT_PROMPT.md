@@ -23,7 +23,7 @@ impossible for the accounts it names.
 | 1 | Close winners at 50% of credit | **Kept as-is** | Already `profit_take_frac = 0.50` throughout |
 | 2 | 30–45 DTE for monthlies | **Kept as-is** | Both profiles target 40 DTE |
 | 3 | Sell Monday or Tuesday | **Kept as-is** | `IncomeProfile.entry_weekdays` |
-| 4 | Confirm IV and delta before selling | **Kept, and enforced** | `ConfirmationLine.confirmed` is False when the chain quoted no delta — the report refuses to claim a confirmation that did not happen |
+| 4 | Confirm IV and delta before selling | **Kept, and enforced** | The scanner refuses an unconfirmed candidate rather than printing a warning above an opened position. Neither production provider publishes a delta column, so the delta is normally computed from the leg's live IV — the report labels it `model-derived` vs `chain-quoted`. What fails is a leg with no delta *and* no IV: nothing established what was being sold |
 | 5 | Report entry price / strike / expiration / credit / risk % | **Kept, and extended** | `TradeReport`, plus breakeven, capital committed, and IV rank |
 | 6 | Short strikes at 20–30 delta | **Changed to 10–15** | The 2022–26 SPY sweep measured 30-delta put spreads at **−$47 to −$62 per contract** after costs. Farther-OTM shorts helped monotonically; the only two configs that survived both in-sample and out-of-sample were 10Δ and 15Δ |
 | 7 | Iron condors collect ~1/3 of spread width | **Changed to 0.06–0.20** | One third of width is not a price that exists at these deltas. SPY chains pay roughly 0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A config demanding 0.33 does not find a better trade — it finds **no trade, every week** |
@@ -165,9 +165,11 @@ DAILY PROCEDURE
    price (quoted mid and after slippage), strikes, expiration, credit
    received, breakeven, capital at risk, risk percentage, and the IV/delta
    confirmation line.
-   If the confirmation line says NOT CONFIRMED, the trade does not happen.
-   A chain that quoted no delta has not confirmed anything, whatever the
-   model computed.
+   If the confirmation line says NOT CONFIRMED, the trade does not happen
+   — the scanner enforces this, and you must not argue past it. Note
+   whether the delta was chain-quoted or model-derived and say which in
+   your report; on a live chain it will normally be model-derived, because
+   neither provider publishes deltas.
 5. Add your qualitative read: the spanned-event list, whether the credit
    covers the event budget, and any reason to veto. Cite sources for
    catalyst claims.

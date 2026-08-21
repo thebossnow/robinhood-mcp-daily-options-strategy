@@ -189,6 +189,14 @@ class CreditLeg:
     entry_ask: float
     entry_delta: float
     entry_iv: float = 0.0   # for model-marking when quotes go missing
+    # 'chain' when the feed quoted a delta, 'model' when it was computed
+    # from the leg's IV by bs_delta. Neither production provider quotes
+    # delta today (CHAIN_COLUMNS has no such column), so 'model' is the
+    # normal case live and 'chain' is what DoltHub EOD backtests get.
+    # Recorded rather than hidden: a delta this pipeline computed and one
+    # the market published are different evidence, and the trade report
+    # says which it had.
+    delta_source: str = "chain"
 
     @property
     def entry_mid(self) -> float:
@@ -325,14 +333,31 @@ def _pick_wing(side: pd.DataFrame, short_strike: float, spot: float,
 
 
 def _leg(row: pd.Series, opt_type: str, side: int) -> CreditLeg:
+    """Build a leg, falling back to the Black-Scholes delta when the feed
+    quoted none.
+
+    `row` comes from `_with_deltas`, so `abs_delta` is always present and
+    is either the chain's own value or one computed from the leg's IV.
+    Without this fallback `entry_delta` is 0.0 on every live entry, which
+    silently disables everything downstream that reads it — the report's
+    IV/delta confirmation and the whole delta-driven half of the
+    IV-spike grading.
+    """
+    quoted = float(row.get("delta", 0.0) or 0.0)
+    if quoted:
+        return CreditLeg(
+            type=opt_type, strike=float(row["strike"]), side=side,
+            entry_bid=float(row["bid"]), entry_ask=float(row["ask"]),
+            entry_delta=quoted, entry_iv=float(row.get("iv", 0.0) or 0.0),
+            delta_source="chain",
+        )
+    abs_delta = float(row.get("abs_delta", 0.0) or 0.0)
+    signed = abs_delta if opt_type == "call" else -abs_delta
     return CreditLeg(
-        type=opt_type,
-        strike=float(row["strike"]),
-        side=side,
-        entry_bid=float(row["bid"]),
-        entry_ask=float(row["ask"]),
-        entry_delta=float(row.get("delta", 0.0) or 0.0),
-        entry_iv=float(row.get("iv", 0.0) or 0.0),
+        type=opt_type, strike=float(row["strike"]), side=side,
+        entry_bid=float(row["bid"]), entry_ask=float(row["ask"]),
+        entry_delta=signed, entry_iv=float(row.get("iv", 0.0) or 0.0),
+        delta_source="model" if abs_delta else "none",
     )
 
 
