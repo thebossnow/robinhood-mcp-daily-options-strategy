@@ -57,14 +57,23 @@ def variant_config(kind: str) -> CreditVariantConfig:
 
 def manage_position(rec, cfg: StrategyConfig, journal: Journal,
                     broker: PaperBroker, provider, settlement_provider,
-                    today: date) -> str:
+                    today: date,
+                    vcfg: CreditVariantConfig | None = None) -> str:
     """Apply the profit-target / time-exit / settlement rules to one open
     position and return the line describing what happened. Raises on any
     provider/data failure — the caller decides whether that should abort
-    the whole batch or just skip this position and retry it next run."""
+    the whole batch or just skip this position and retry it next run.
+
+    `vcfg` overrides the VALIDATED lookup. Callers that manage variants
+    from another registry (scripts/manage_income.py) must pass it: without
+    it a variant absent from VALIDATED silently falls back to
+    CreditVariantConfig's defaults. A short-DTE variant that sets its own
+    tighter exit — spec_weekly_put_25d's time_exit_dte=1, say — then gets
+    the default's min(21, half the entry DTE) instead and closes early.
+    """
     import json as _json
 
-    vcfg = variant_config(rec.kind)
+    vcfg = vcfg or variant_config(rec.kind)
     entry = journal.candidate(rec.id) or {}
     dte_at_entry = int(entry.get("dte_at_entry", 45))
     dte = (date.fromisoformat(rec.expiration) - today).days

@@ -1,0 +1,22 @@
+{
+  "_README": [
+    "Copy to configs/events.json and fill in REAL dates before relying on",
+    "the event gates. This template ships EMPTY on purpose: fabricated FOMC",
+    "or CPI dates would silently blacklist the wrong days and clear the",
+    "right ones, which is worse than having no calendar at all.",
+    "",
+    "Primary sources (refresh once a year, both publish ~12 months ahead):",
+    "  FOMC decision dates — federalreserve.gov/monetarypolicy/fomccalendars.htm",
+    "  CPI / PPI releases  — bls.gov/schedule/news_release/",
+    "",
+    "NFP is NOT listed here: options_trader/risk/events.py derives it as the",
+    "first Friday of each month. Add an explicit NFP entry only to override",
+    "a month BLS shifted for a federal holiday — an explicit entry wins over",
+    "the derived one for the same (date, kind).",
+    "",
+    "kind: one of FOMC, CPI, NFP, EARNINGS (see events.MAJOR_KINDS).",
+    "Single-name earnings come from the MCP get_earnings_calendar call at",
+    "scan time, not from this file."
+  ],
+  "events": []
+}

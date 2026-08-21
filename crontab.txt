@@ -27,3 +27,13 @@
 45 12 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/credit_manage.sh
 # Daily digest 16:00 ET (= 13:00 PT): open positions, P&L vs target, stats
 0 13 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/daily_digest.sh
+
+# Income framework (evidence_adjusted profile — see INCOME_AGENT_PROMPT.md).
+# Entries 10:35 ET (= 7:35 PT), five minutes after the credit scan so the two
+# don't contend for the same MCP chain calls; scan_income.py self-gates to
+# Mondays and Tuesdays. Management daily 15:50 ET (= 12:50 PT).
+# The management job applies the profit target and time exit automatically
+# but only REPORTS IV-spike grades — grep logs/income_trading.log for
+# DEFEND or CLOSE, which need a human decision.
+35 7 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/income_entry.sh
+50 12 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/income_manage.sh
