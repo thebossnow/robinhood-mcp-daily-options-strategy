@@ -167,3 +167,69 @@ class TestUnderlyingRescale:
         now = scaled.variants["income_put10"]
         assert (now.short_put_delta, now.min_dte) == (orig.short_put_delta,
                                                       orig.min_dte)
+
+
+class TestStrikeGridGeometry:
+    """Wings are a fraction of spot; strike grids are absolute. The
+    geometry does not port down to a low-priced underlying, and these
+    pin how the code says so rather than discovering it in a backtest."""
+
+    def test_a_4pct_wing_spans_30_strikes_on_spy(self):
+        from options_trader.signals.income import wing_increments
+        assert wing_increments(762.60, 1.00, 0.04) == pytest.approx(30.5, abs=0.1)
+
+    def test_the_same_4pct_wing_is_one_strike_on_a_14_dollar_name(self):
+        from options_trader.signals.income import wing_increments
+        assert wing_increments(13.99, 0.50, 0.04) < 1.2
+
+    def test_the_narrowest_usable_wing_is_tiny_on_spy(self):
+        from options_trader.signals.income import min_wing_frac
+        assert min_wing_frac(762.60, 1.00) < 0.005
+
+    def test_the_narrowest_usable_wing_is_huge_on_a_cheap_name(self):
+        from options_trader.signals.income import min_wing_frac
+        # 3 x $0.50 on a $13.99 stock is already >10% of spot — a
+        # structurally different trade from anything the sweep validated.
+        assert min_wing_frac(13.99, 0.50) > 0.10
+
+    def test_rescaling_widens_every_variant_that_cannot_be_placed(self):
+        from options_trader.signals.income import (min_wing_frac,
+                                                   scaled_for_underlying)
+        scaled = scaled_for_underlying(EVIDENCE_ADJUSTED, 13.99, 0.50)
+        floor = min_wing_frac(13.99, 0.50)
+        for v in scaled.variants.values():
+            assert v.wing_width_frac == pytest.approx(floor)
+
+    def test_rescaling_never_narrows_a_wing(self):
+        from options_trader.signals.income import scaled_for_underlying
+        scaled = scaled_for_underlying(EVIDENCE_ADJUSTED, 762.60, 1.00)
+        for name, v in scaled.variants.items():
+            assert v.wing_width_frac == \
+                EVIDENCE_ADJUSTED.variants[name].wing_width_frac
+
+    def test_an_untouched_profile_gains_no_warning(self):
+        from options_trader.signals.income import scaled_for_underlying
+        scaled = scaled_for_underlying(EVIDENCE_ADJUSTED, 762.60, 1.00)
+        assert len(scaled.notes) == len(EVIDENCE_ADJUSTED.notes)
+
+    def test_a_rescaled_profile_says_it_is_not_the_validated_geometry(self):
+        from options_trader.signals.income import scaled_for_underlying
+        scaled = scaled_for_underlying(EVIDENCE_ADJUSTED, 13.99, 0.50)
+        note = scaled.notes[-1]
+        assert "NOT the validated geometry" in note
+        assert "not comparable to the SPY sweep" in note.replace("\n", " ")
+
+    def test_the_original_profile_is_untouched(self):
+        from options_trader.signals.income import scaled_for_underlying
+        scaled_for_underlying(EVIDENCE_ADJUSTED, 13.99, 0.50)
+        assert EVIDENCE_ADJUSTED.variants["income_condor15"].wing_width_frac == 0.04
+        assert len(EVIDENCE_ADJUSTED.notes) == 3
+
+    def test_degenerate_inputs_are_rejected(self):
+        from options_trader.signals.income import min_wing_frac, wing_increments
+        with pytest.raises(ValueError):
+            min_wing_frac(0.0, 0.50)
+        with pytest.raises(ValueError):
+            min_wing_frac(13.99, 0.0)
+        with pytest.raises(ValueError):
+            wing_increments(13.99, 0.0, 0.04)
