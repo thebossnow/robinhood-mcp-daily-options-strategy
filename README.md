@@ -464,7 +464,7 @@ Both readings ship, in `options_trader/signals/income.py`:
 | close at 50% of credit | kept | already `profit_take_frac = 0.50` |
 | 30–45 DTE monthlies | kept | both profiles target 40 DTE |
 | enter Monday/Tuesday | kept | `IncomeProfile.entry_weekdays` |
-| confirm IV and delta first | kept, enforced | `ConfirmationLine.confirmed` is False when the chain quoted no delta — a Black-Scholes delta this pipeline computed itself is not the market confirming anything |
+| confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. Neither provider publishes a delta column, so the delta is computed from the leg's live IV and labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails |
 | report price/strike/expiry/credit/risk% | kept, extended | `TradeReport`, plus breakeven, dollar capital, IV rank |
 | 20–30Δ short strikes | **→ 10–15Δ** | the sweep measured 30Δ put spreads at −$47 to −$62/contract; farther-OTM helped monotonically, and only 10Δ and 15Δ survived both halves |
 | condors collect ⅓ of width | **→ 0.06–0.20** | SPY chains pay ~0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A 0.33 floor selects no trade, not a better one |
@@ -547,6 +547,12 @@ Entries gate in the order that discards work soonest: cadence → vol regime
 expiration → structure → IV rank → event span → sizing → RiskManager →
 report. Every stop is journaled as NO QUALIFYING TRADE naming the gate that
 produced it.
+
+The two books share `journal.db` but are tagged separately (`strategy`
+`credit` vs `income`), so `manage_credit.py` and `manage_income.py` each
+manage only their own positions with their own variant registry. Both tags
+are in `journal.CREDIT_STRATEGIES`, which is what keeps `record_exit`
+flipping the P&L sign for premium sold rather than paid.
 
 Management applies the 50% profit target and the time exit automatically,
 and **reports** the IV-spike grade without acting on it: the profit target

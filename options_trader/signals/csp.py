@@ -73,6 +73,8 @@ class CSPPosition:
     credit: float = 0.0         # per share, after entry slippage
     entry_delta: float = 0.0
     entry_iv: float = 0.0
+    # 'chain' | 'model' | 'none' — see CreditLeg.delta_source.
+    delta_source: str = "chain"
     assignment_plan: str = "wheel"
     variant: str = "csp"
     legs: list[dict] = field(default_factory=list)
@@ -150,6 +152,17 @@ def build_csp(chain: pd.DataFrame, spot: float, underlying: str,
     if short is None or not _usable_quote(short):
         return None
 
+    quoted = float(short.get("delta", 0.0) or 0.0)
+    abs_delta = float(short.get("abs_delta", 0.0) or 0.0)
+    if quoted:
+        entry_delta, delta_source = quoted, "chain"
+    elif abs_delta:
+        # Puts carry negative delta; _with_deltas only ever yields the
+        # magnitude, so the sign has to be restored here.
+        entry_delta, delta_source = -abs_delta, "model"
+    else:
+        entry_delta, delta_source = 0.0, "none"
+
     bid, ask = float(short["bid"]), float(short["ask"])
     credit_mid = (bid + ask) / 2.0
     credit = credit_mid - slippage_half_spread_frac * (ask - bid) / 2.0
@@ -161,7 +174,7 @@ def build_csp(chain: pd.DataFrame, spot: float, underlying: str,
         underlying=underlying, entry_date=entry_date, expiration=expiration,
         dte_at_entry=dte, spot_at_entry=spot, strike=strike,
         credit_mid=round(credit_mid, 4), credit=round(credit, 4),
-        entry_delta=float(short.get("delta", 0.0) or 0.0),
+        entry_delta=entry_delta, delta_source=delta_source,
         entry_iv=float(short.get("iv", 0.0) or 0.0),
         assignment_plan=cfg.assignment_plan, variant=cfg.name,
         legs=[{"type": "put", "strike": strike, "side": -1,

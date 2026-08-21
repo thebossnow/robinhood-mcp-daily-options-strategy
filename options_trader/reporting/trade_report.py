@@ -36,31 +36,49 @@ from dataclasses import dataclass, field
 class ConfirmationLine:
     """The pre-sale IV/delta confirmation, and whether it actually happened.
 
-    Only a delta the CHAIN quoted counts. `credit.build_position` can select
-    strikes from a Black-Scholes delta computed off the leg's IV when the
-    feed omits the column, and those positions are perfectly tradeable --
-    but a model-inferred delta is this pipeline agreeing with itself, not
-    the market confirming anything. The framework asks for a confirmation
-    step; a report that showed a self-computed number in that slot would
-    turn the step into a formality.
+    `delta_source` records where the number came from -- 'chain' when the
+    feed published a delta, 'model' when `credit.build_position` computed
+    one from the leg's IV, 'none' when neither was possible.
+
+    An earlier version of this class treated only a chain-quoted delta as a
+    confirmation. That was wrong in the same specific way the framework's
+    "never hold through a major event" rule is wrong: neither production
+    provider publishes a delta column (see `data/provider.CHAIN_COLUMNS`),
+    so the gate could never be satisfied on a live chain, and a gate that
+    can never pass is not a safety property -- it is a pipeline that
+    refuses every trade, or worse, one whose refusal everybody learns to
+    ignore.
+
+    So a model delta CONFIRMS and the line says so. What still fails is a
+    leg with no delta at all or no IV: there the pipeline could not
+    establish what it was selling, from the market or from its own model,
+    and that is a real reason not to sell.
     """
     short_strike: float | None
     short_delta: float | None
     short_iv: float | None
     iv_rank_note: str = ""
+    delta_source: str = "chain"
 
     @property
     def confirmed(self) -> bool:
-        return self.short_delta is not None and self.short_iv is not None
+        return (self.short_delta is not None and self.short_iv is not None
+                and self.delta_source in ("chain", "model"))
 
     def render(self) -> str:
         if not self.confirmed:
             missing = [n for n, v in (("delta", self.short_delta),
                                       ("IV", self.short_iv)) if v is None]
-            return (f"NOT CONFIRMED — chain supplied no {' and no '.join(missing)} "
-                    f"for the short strike; do not sell on an unconfirmed quote")
+            if not missing:
+                missing = ["usable delta"]
+            return (f"NOT CONFIRMED — no {' and no '.join(missing)} for the "
+                    f"short strike, from the chain or the model; "
+                    f"do not sell what you cannot measure")
+        qualifier = ("chain-quoted" if self.delta_source == "chain"
+                     else "model-derived (feed quotes no delta)")
         line = (f"confirmed: short {self.short_strike:g} at "
-                f"{abs(self.short_delta):.2f} delta, IV {self.short_iv:.1%}")
+                f"{abs(self.short_delta):.2f} delta [{qualifier}], "
+                f"IV {self.short_iv:.1%}")
         return f"{line} | {self.iv_rank_note}" if self.iv_rank_note else line
 
 
@@ -130,6 +148,7 @@ class TradeReport:
             "equity": self.equity, "risk_pct": round(self.risk_pct, 6),
             "tier_pct": self.tier_pct, "breakeven": self.breakeven,
             "iv_delta_confirmed": self.confirmation.confirmed,
+            "delta_source": self.confirmation.delta_source,
             "short_delta": self.confirmation.short_delta,
             "short_iv": self.confirmation.short_iv,
             "event_note": self.event_note, "notes": self.notes,
@@ -178,7 +197,8 @@ def report_credit_position(pos, sizing, equity: float, structure: str,
             short_strike=short.strike if short else None,
             short_delta=(short.entry_delta if short and short.entry_delta else None),
             short_iv=(short.entry_iv if short and short.entry_iv else None),
-            iv_rank_note=iv_rank_note),
+            iv_rank_note=iv_rank_note,
+            delta_source=getattr(short, "delta_source", "none") if short else "none"),
         event_note=event_note, notes=list(notes or []),
     )
 
@@ -206,6 +226,7 @@ def report_csp_position(pos, sizing, equity: float, iv_rank_note: str = "",
             short_strike=pos.strike,
             short_delta=pos.entry_delta or None,
             short_iv=pos.entry_iv or None,
-            iv_rank_note=iv_rank_note),
+            iv_rank_note=iv_rank_note,
+            delta_source=getattr(pos, "delta_source", "chain")),
         event_note=event_note, notes=extra,
     )

@@ -41,7 +41,7 @@ from options_trader.execution.paper import PaperBroker
 from options_trader.journal import Journal
 from options_trader.risk.iv_spike import IVSpikeConfig, assess
 from options_trader.risk.vol_regime import fetch_vix_closes
-from options_trader.signals.credit import CreditVariantConfig
+from options_trader.signals.credit import CreditVariantConfig, bs_delta
 from options_trader.signals.income import DEFAULT_PROFILE, PROFILES, get_profile
 
 # Reuse the marking and exit logic rather than forking it: a second copy
@@ -52,15 +52,24 @@ from options_trader.signals.income import DEFAULT_PROFILE, PROFILES, get_profile
 # puts the repo root first — or imported as `scripts.manage_income` by the
 # tests, where scripts/ itself is not on the path.
 from scripts.manage_credit import manage_position, mark_position   # noqa: E402,F401
+from scripts.scan_income import INCOME_STRATEGY   # noqa: E402
 
 
-def short_leg_quote(legs: list[dict], chain) -> tuple[float | None, float | None]:
+def short_leg_quote(legs: list[dict], chain, spot: float,
+                    dte: int) -> tuple[float | None, float | None]:
     """(iv, |delta|) for the tested short leg from today's chain.
 
     The put side is the tested side: an index that rallies through a short
     call is a loss too, but it is the selloff that produces the fast,
     gapping version this grading exists to catch. Falls back to the short
     call when the structure has no put side.
+
+    Neither production provider publishes a delta column, so the delta is
+    normally computed from the leg's live IV via Black-Scholes. Without
+    that fallback this function returns None for delta on every real run,
+    and `assess()` can then only ever reach WATCH — the DEFEND and CLOSE
+    branches, the entire reason the grading exists, would be unreachable
+    outside tests.
     """
     for opt_type in ("put", "call"):
         short = next((l for l in legs
@@ -74,8 +83,13 @@ def short_leg_quote(legs: list[dict], chain) -> tuple[float | None, float | None
         r = row.iloc[0]
         iv = float(r.get("iv", 0.0) or 0.0) or None
         raw = r.get("delta", 0.0)
-        delta = abs(float(raw)) if raw else None
-        return iv, delta
+        if raw:
+            return iv, abs(float(raw))
+        if iv is None or dte <= 0 or spot <= 0:
+            return iv, None
+        modelled = bs_delta(opt_type, spot, float(short["strike"]), iv,
+                            max(dte, 1) / 365.0)
+        return iv, (abs(modelled) or None)
     return None, None
 
 
@@ -88,8 +102,8 @@ def entry_short_iv(entry: dict) -> float | None:
     return None
 
 
-def grade_position(rec, journal: Journal, chain,
-                   cfg: IVSpikeConfig) -> str | None:
+def grade_position(rec, journal: Journal, chain, cfg: IVSpikeConfig,
+                   spot: float, dte: int) -> str | None:
     """One line describing the IV-spike grade, or None when there is
     nothing worth saying (a NONE grade on a quiet position)."""
     entry = journal.candidate(rec.id) or {}
@@ -97,7 +111,7 @@ def grade_position(rec, journal: Journal, chain,
     e_iv = entry_short_iv(entry)
     if e_iv is None:
         return None
-    now_iv, now_delta = short_leg_quote(legs, chain)
+    now_iv, now_delta = short_leg_quote(legs, chain, spot, dte)
     if now_iv is None:
         return None
     rolls = int(entry.get("rolls_used", 0))
@@ -151,7 +165,7 @@ def main() -> int:
     )
     today = date.today()
 
-    open_positions = journal.open_credit_positions()
+    open_positions = journal.open_credit_positions(INCOME_STRATEGY)
     print(f"{datetime.now().isoformat(timespec='seconds')}: "
           f"{len(open_positions)} open position(s), profile {profile.name}")
 
@@ -165,7 +179,8 @@ def main() -> int:
             dte = (date.fromisoformat(rec.expiration) - today).days
             if dte > 0:
                 snap = provider.get_chain(rec.underlying, rec.expiration)
-                grade = grade_position(rec, journal, snap.chain, spike_cfg)
+                grade = grade_position(rec, journal, snap.chain,
+                                       spike_cfg, snap.spot, dte)
             print(manage_position(rec, cfg, journal, broker, provider,
                                   settlement_provider, today,
                                   vcfg=variant_config(rec.kind, profile)))
@@ -180,7 +195,7 @@ def main() -> int:
     if attention:
         print(f"\n{attention} position(s) need a human decision — nothing was "
               f"rolled or closed on the vol grade alone.")
-    print(f"Journal stats: {journal.stats(strategy='income')}")
+    print(f"Journal stats: {journal.stats(strategy=INCOME_STRATEGY)}")
     return 0
 
 
