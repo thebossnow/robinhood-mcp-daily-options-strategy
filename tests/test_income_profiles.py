@@ -7,9 +7,10 @@ import pytest
 
 from options_trader.signals.credit import build_position
 from options_trader.signals.income import (
-    AS_SPECIFIED, DEFAULT_PROFILE, EVIDENCE_ADJUSTED, PROFILES, get_profile,
-    with_underlying_scale,
+    AS_SPECIFIED, DEFAULT_PROFILE, EVIDENCE_ADJUSTED, PROFILES,
+    fit_wing_to_grid, get_profile, infer_strike_grid, with_underlying_scale,
 )
+from options_trader.signals.iv_rank import build_iv_history, read_iv_rank
 
 SPOT = 762.60
 
@@ -233,3 +234,110 @@ class TestStrikeGridGeometry:
             min_wing_frac(13.99, 0.0)
         with pytest.raises(ValueError):
             wing_increments(13.99, 0.0, 0.04)
+
+
+class TestVerbatimProfileGatesOnRankNotPercentile:
+    """The framework says "IV rank above 30". AS_SPECIFIED exists to be
+    that sentence, so it must gate on IV RANK.
+
+    `IncomeProfile.iv_rank_use_percentile` defaults to True because
+    percentile is the better statistic — but inheriting that default here
+    made the verbatim profile silently gate on something the framework
+    never named, in the direction that passes MORE trades.
+    """
+
+    def test_as_specified_gates_on_rank(self):
+        assert AS_SPECIFIED.iv_rank_use_percentile is False
+        assert AS_SPECIFIED.min_iv_rank == 0.30
+
+    def test_adjusted_profile_states_percentile_rather_than_defaulting(self):
+        assert EVIDENCE_ADJUSTED.iv_rank_use_percentile is True
+
+    def test_the_two_statistics_actually_disagree_at_this_threshold(self):
+        """A year of calm after one spike: rank is crushed, percentile is
+        not. The verbatim profile must refuse here; it previously passed."""
+        hist = build_iv_history(
+            {f"2026-01-{d:02d}": 0.12 for d in range(1, 29)}
+            | {"2025-12-01": 0.80}          # the spike that sets the high
+        )
+        reading = read_iv_rank(0.14, hist)
+        assert reading.iv_rank < 0.30          # literal framework reading
+        assert reading.iv_percentile > 0.30    # what the default would use
+
+        assert not reading.meets(AS_SPECIFIED.min_iv_rank,
+                                 AS_SPECIFIED.iv_rank_use_percentile)
+        assert reading.meets(AS_SPECIFIED.min_iv_rank, True)
+
+
+class TestGridInference:
+    """`infer_strike_grid` measures the grid on the rows in hand, because
+    TYPICAL_STRIKE_GRID is a table of guesses and the placeable spacing is
+    not always the nominal one."""
+
+    @staticmethod
+    def _chain(strikes):
+        return pd.DataFrame({"strike": strikes,
+                             "type": ["put"] * len(strikes)})
+
+    def test_measures_a_dollar_grid_on_an_index(self):
+        grid = infer_strike_grid(self._chain([760.0, 761.0, 762.0, 763.0]),
+                                 762.0)
+        assert grid == pytest.approx(1.00)
+
+    def test_measures_a_half_dollar_grid_on_a_cheap_name(self):
+        grid = infer_strike_grid(self._chain([13.0, 13.5, 14.0, 14.5, 15.0]),
+                                 14.0)
+        assert grid == pytest.approx(0.50)
+
+    def test_only_strikes_near_the_money_count(self):
+        # Wide far-OTM spacing must not drag the near-money answer wider.
+        grid = infer_strike_grid(
+            self._chain([100.0, 300.0, 740.0, 741.0, 742.0, 743.0]), 742.0)
+        assert grid == pytest.approx(1.00)
+
+    def test_ties_break_toward_the_wider_spacing(self):
+        # One 1.0 gap and one 5.0 gap: assuming the tighter grid would
+        # understate how coarse the placeable geometry is.
+        grid = infer_strike_grid(self._chain([700.0, 701.0, 706.0]), 703.0)
+        assert grid == pytest.approx(5.00)
+
+    def test_a_single_near_money_strike_has_no_grid(self):
+        assert infer_strike_grid(self._chain([14.0, 900.0]), 14.0) is None
+
+    def test_an_empty_chain_has_no_grid(self):
+        assert infer_strike_grid(pd.DataFrame({"strike": []}), 14.0) is None
+
+    def test_degenerate_spot_is_rejected(self):
+        with pytest.raises(ValueError):
+            infer_strike_grid(self._chain([1.0, 2.0]), 0.0)
+
+
+class TestFitWingToGrid:
+    """One implementation of the widen-only rule, used by both
+    `scaled_for_underlying` and the scanner."""
+
+    def test_a_placeable_wing_is_returned_unchanged_with_no_note(self):
+        v = EVIDENCE_ADJUSTED.variants["income_condor15"]
+        fitted, note = fit_wing_to_grid(v, 762.60, 1.00)
+        assert fitted is v
+        assert note is None
+
+    def test_an_unplaceable_wing_is_widened_and_annotated(self):
+        v = EVIDENCE_ADJUSTED.variants["income_condor15"]
+        fitted, note = fit_wing_to_grid(v, 14.40, 0.50)
+        assert fitted.wing_width_frac > v.wing_width_frac
+        assert fitted.wing_width_frac == pytest.approx(3 * 0.50 / 14.40)
+        assert "NOT the validated geometry" in note
+        assert "WING RESCALED" in note
+
+    def test_the_input_config_is_never_mutated(self):
+        v = EVIDENCE_ADJUSTED.variants["income_condor15"]
+        fit_wing_to_grid(v, 14.40, 0.50)
+        assert v.wing_width_frac == pytest.approx(0.04)
+
+    def test_everything_except_the_wing_survives(self):
+        v = EVIDENCE_ADJUSTED.variants["income_condor15"]
+        fitted, _ = fit_wing_to_grid(v, 14.40, 0.50)
+        assert fitted.short_put_delta == v.short_put_delta
+        assert fitted.min_dte == v.min_dte
+        assert fitted.min_credit_frac == v.min_credit_frac

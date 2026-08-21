@@ -464,7 +464,7 @@ Both readings ship, in `options_trader/signals/income.py`:
 | close at 50% of credit | kept | already `profit_take_frac = 0.50` |
 | 30–45 DTE monthlies | kept | both profiles target 40 DTE |
 | enter Monday/Tuesday | kept | `IncomeProfile.entry_weekdays` |
-| confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. Neither provider publishes a delta column, so the delta is computed from the leg's live IV and labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails |
+| confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. The delta is labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails. yfinance and the MCP provider publish no delta column, so live entries there are model-derived; `--provider uw` quotes a real delta per contract and reports `chain-quoted` |
 | report price/strike/expiry/credit/risk% | kept, extended | `TradeReport`, plus breakeven, dollar capital, IV rank |
 | 20–30Δ short strikes | **→ 10–15Δ** | the sweep measured 30Δ put spreads at −$47 to −$62/contract; farther-OTM helped monotonically, and only 10Δ and 15Δ survived both halves |
 | condors collect ⅓ of width | **→ 0.06–0.20** | SPY chains pay ~0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A 0.33 floor selects no trade, not a better one |
@@ -540,13 +540,24 @@ python scripts/size_check.py --equity 25000 --spot 762.60 --width 5
 python scripts/scan_income.py --profile evidence_adjusted --provider mcp
 python scripts/scan_income.py --profile as_specified --dry-run   # see the refusals
 python scripts/manage_income.py --provider mcp
+
+# Unusual Whales live chains: real open interest AND a chain-quoted delta.
+# --underlying steps outside the validated universe on purpose; the wing is
+# refitted to that chain's strike grid and the report says it did.
+python scripts/scan_income.py --provider uw --underlying F --dry-run
 ```
 
 Entries gate in the order that discards work soonest: cadence → vol regime
 (fails **closed**) → event blackout (fails **open**, and says so) →
-expiration → structure → IV rank → event span → sizing → RiskManager →
-report. Every stop is journaled as NO QUALIFYING TRADE naming the gate that
-produced it.
+expiration → structure → **wing fit to the live strike grid** → IV rank →
+event span → RiskManager capacity → sizing within it → report. Every stop is
+journaled as NO QUALIFYING TRADE naming the gate that produced it.
+
+Sizing asks the RiskManager for capacity *before* choosing a contract count,
+so the number in the report an operator confirms is the number that reaches
+the journal. `RiskCheck.max_contracts` is that capacity — the smaller of the
+per-trade cap and the room left under the portfolio-heat cap — not a verdict
+about a single contract.
 
 The two books share `journal.db` but are tagged separately (`strategy`
 `credit` vs `income`), so `manage_credit.py` and `manage_income.py` each
@@ -558,6 +569,38 @@ Management applies the 50% profit target and the time exit automatically,
 and **reports** the IV-spike grade without acting on it: the profit target
 has a backtested basis, the spike response does not, and the closest thing
 this repo did measure argued against it.
+
+### The geometry does not port to a cheap underlying
+
+Run against live Unusual Whales chains on 2026-08-21, `evidence_adjusted`
+behaves very differently on an index than on a $14 stock. Wings are
+configured as a fraction of spot; strike grids are absolute, so the
+resolution available to a wing collapses as price falls:
+
+| | SPY (762) | F (14.30) | CLSK (13.16) |
+|---|---|---|---|
+| near-money strike grid, measured | $1.00 | $0.50 | $0.50 |
+| 4% wing spans | 30.5 strikes | 1.14 strikes | 1.05 strikes |
+| wing after fitting | unchanged | 4% → **10.5%** | 4% → **11.6%** |
+| 30–45 DTE legs passing the liquidity gate | 55 | 0–2 | **0** |
+| short delta sold vs 0.10 target | 0.098 (1.0×) | **0.312 (3.1×)** | 0.079 (0.8×) |
+
+Three things that only showed up against real chains:
+
+- **The condor and the monthly put spread find no trade at all on F or
+  CLSK.** Not because the fit is wrong but because, after widening the wing
+  to something placeable, the credit no longer clears the floor. The
+  refusal is the correct answer and it is journaled as one.
+- **A fitted wing does not mean a fitted short strike.** F's weekly sold a
+  0.312-delta put against a 0.10 target, because on a $0.50 grid the
+  nearest strike to 10Δ is three times that. The report discloses the
+  delta it sold; nothing yet *flags* the distance from target.
+- **Unusual Whales omits greeks and NBBO for contracts that have not
+  traded**, returning nulls rather than zeros — 29 of 30 CLSK puts at the
+  42-DTE expiry. `UWLiveProvider` keeps those as NaN rather than coercing
+  to 0.0, because a missing delta is not a delta of zero; the historical
+  path (`day_chains`) still coerces with `float(r["delta"] or 0)`, which
+  would read a dead contract as deep OTM.
 
 ### What this is not
 
