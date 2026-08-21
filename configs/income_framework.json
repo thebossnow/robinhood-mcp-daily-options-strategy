@@ -1,0 +1,17 @@
+{
+  "underlyings": [
+    "SPY"
+  ],
+  "min_dte": 30,
+  "max_dte": 45,
+  "account_equity": 75000.0,
+  "max_risk_per_trade_pct": 0.05,
+  "daily_loss_limit_pct": 0.1,
+  "max_open_positions": 4,
+  "max_consecutive_losses": 3,
+  "slippage_half_spread_frac": 0.5,
+  "vix_entry_ceiling": 30.0,
+  "vix_spike_pct": 0.3,
+  "vix_spike_lookback_days": 5,
+  "take_profit_pct": 0.5
+}

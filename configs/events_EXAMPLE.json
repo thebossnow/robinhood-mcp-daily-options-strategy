@@ -1,0 +1,14 @@
+{
+  "_README": [
+    "ILLUSTRATIVE ONLY — the dates below are NOT the real 2026 calendar and",
+    "must not be used to trade. This file exists so the tests and the docs",
+    "have a non-empty calendar to demonstrate the gates against. Build the",
+    "real configs/events.json from the primary sources named in",
+    "configs/events_TEMPLATE.json."
+  ],
+  "events": [
+    {"date": "2026-09-16", "kind": "FOMC", "note": "ILLUSTRATIVE — verify"},
+    {"date": "2026-09-10", "kind": "CPI", "note": "ILLUSTRATIVE — verify"},
+    {"date": "2026-10-28", "kind": "FOMC", "note": "ILLUSTRATIVE — verify"}
+  ]
+}
