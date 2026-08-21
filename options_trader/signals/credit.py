@@ -189,6 +189,14 @@ class CreditLeg:
     entry_ask: float
     entry_delta: float
     entry_iv: float = 0.0   # for model-marking when quotes go missing
+    # 'chain' when the feed quoted a delta, 'model' when it was computed
+    # from the leg's IV by bs_delta. Neither production provider quotes
+    # delta today (CHAIN_COLUMNS has no such column), so 'model' is the
+    # normal case live and 'chain' is what DoltHub EOD backtests get.
+    # Recorded rather than hidden: a delta this pipeline computed and one
+    # the market published are different evidence, and the trade report
+    # says which it had.
+    delta_source: str = "chain"
 
     @property
     def entry_mid(self) -> float:
@@ -280,6 +288,51 @@ def leg_passes_live_liquidity(row: pd.Series, min_open_interest: int = 100,
     return (row["ask"] - row["bid"]) <= max(min_spread_abs, max_spread_pct * mid)
 
 
+# How far past its target delta a short leg may land before the structure
+# is refused. Strike selection is "nearest available", which is exact on a
+# $1.00 index grid and coarse on a cheap underlying: at F 14.30 on a $0.50
+# grid the nearest strike to 0.10 delta was 0.312 (measured 2026-08-21),
+# a position carrying roughly three times the intended risk under a name
+# that says 10-delta. 1.5x is a tolerance, not a measurement -- no backtest
+# sets it -- so it is one named constant rather than a per-variant field.
+MAX_SHORT_DELTA_RATIO = 1.5
+
+
+def short_delta_off_target(pos: "CreditPosition", cfg: "CreditVariantConfig",
+                           max_ratio: float = MAX_SHORT_DELTA_RATIO
+                           ) -> str | None:
+    """Reason string when a short leg is materially riskier than configured,
+    else None.
+
+    Guards the RISK-INCREASING side only. A short that lands further OTM
+    than asked (F's 0.079 against a 0.10 target) sells less premium than
+    modelled, which `min_credit_frac` already judges on its own terms; a
+    short that lands NEARER the money is carrying risk the variant never
+    authorized, and nothing else in the chain notices.
+
+    A leg whose delta could not be established is not judged here -- the
+    trade report's confirmation gate refuses it for that separate reason,
+    and reporting "0.0 vs 0.10" would name the wrong fault.
+    """
+    for leg in pos.legs:
+        if leg.side != -1:
+            continue
+        target = (cfg.short_put_delta if leg.type == "put"
+                  else cfg.short_call_delta)
+        if not target:
+            continue
+        actual = abs(leg.entry_delta)
+        if actual != actual or actual <= 0:      # NaN or absent
+            continue
+        if actual > target * max_ratio:
+            return (f"short {leg.type} at {leg.strike:g} carries "
+                    f"{actual:.3f} delta against a {target:.2f} target "
+                    f"({actual / target:.1f}x, limit {max_ratio:.1f}x) — "
+                    f"nearest available strike is not the strike this "
+                    f"variant asked for")
+    return None
+
+
 def _usable_quote(row: pd.Series) -> bool:
     return row["ask"] > 0 and row["ask"] >= row["bid"] >= 0
 
@@ -325,14 +378,31 @@ def _pick_wing(side: pd.DataFrame, short_strike: float, spot: float,
 
 
 def _leg(row: pd.Series, opt_type: str, side: int) -> CreditLeg:
+    """Build a leg, falling back to the Black-Scholes delta when the feed
+    quoted none.
+
+    `row` comes from `_with_deltas`, so `abs_delta` is always present and
+    is either the chain's own value or one computed from the leg's IV.
+    Without this fallback `entry_delta` is 0.0 on every live entry, which
+    silently disables everything downstream that reads it — the report's
+    IV/delta confirmation and the whole delta-driven half of the
+    IV-spike grading.
+    """
+    quoted = float(row.get("delta", 0.0) or 0.0)
+    if quoted:
+        return CreditLeg(
+            type=opt_type, strike=float(row["strike"]), side=side,
+            entry_bid=float(row["bid"]), entry_ask=float(row["ask"]),
+            entry_delta=quoted, entry_iv=float(row.get("iv", 0.0) or 0.0),
+            delta_source="chain",
+        )
+    abs_delta = float(row.get("abs_delta", 0.0) or 0.0)
+    signed = abs_delta if opt_type == "call" else -abs_delta
     return CreditLeg(
-        type=opt_type,
-        strike=float(row["strike"]),
-        side=side,
-        entry_bid=float(row["bid"]),
-        entry_ask=float(row["ask"]),
-        entry_delta=float(row.get("delta", 0.0) or 0.0),
-        entry_iv=float(row.get("iv", 0.0) or 0.0),
+        type=opt_type, strike=float(row["strike"]), side=side,
+        entry_bid=float(row["bid"]), entry_ask=float(row["ask"]),
+        entry_delta=signed, entry_iv=float(row.get("iv", 0.0) or 0.0),
+        delta_source="model" if abs_delta else "none",
     )
 
 

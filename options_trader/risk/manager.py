@@ -16,6 +16,10 @@ from ..journal import Journal
 
 @dataclass
 class RiskCheck:
+    """`max_contracts` is the number of contracts the book can actually
+    absorb — the smaller of what the per-trade cap allows and what is left
+    under the portfolio-heat cap. Callers may open up to that many; opening
+    more would breach a cap this check is responsible for."""
     allowed: bool
     reasons: list[str] = field(default_factory=list)
     max_contracts: int = 0
@@ -39,7 +43,14 @@ class RiskManager:
 
     def check(self, max_loss_per_contract: float,
               today: str | None = None) -> RiskCheck:
-        """Gate a prospective trade. max_loss_per_contract in dollars."""
+        """Gate a prospective trade. max_loss_per_contract in dollars.
+
+        Returns permission plus the CAPACITY (`RiskCheck.max_contracts`) the
+        book has for this structure. Size is decided separately, by
+        risk/sizing.py; a position must clear both, and a caller that sizes
+        above the returned capacity must be clamped to it before the report
+        it shows the operator is rendered.
+        """
         today = today or date.today().isoformat()
         reasons: list[str] = []
 
@@ -105,21 +116,29 @@ class RiskManager:
             )
 
         # Per-trade sizing
-        max_contracts = int(self.cfg.max_risk_per_trade // max_loss_per_contract)
-        if max_contracts < 1:
+        max_by_trade = int(self.cfg.max_risk_per_trade // max_loss_per_contract)
+        if max_by_trade < 1:
             reasons.append(
                 f"single contract risks {max_loss_per_contract:.2f}, over the "
                 f"per-trade cap of {self.cfg.max_risk_per_trade:.2f} "
                 f"({self.cfg.max_risk_per_trade_pct:.1%} of equity)"
             )
 
-        # Portfolio heat: open risk + new risk must stay under 2x daily limit
+        # Portfolio heat: open risk + new risk must stay under 2x daily limit.
+        # `max_contracts` is a CAPACITY, not a per-contract verdict: callers
+        # size positions at more than one contract (scan_income.py sizes from
+        # the tier schedule), and clamping to a capacity that only ever
+        # considered a single contract let an N-contract entry add N times
+        # the risk this cap was written to bound.
         heat_cap = 2.0 * self.cfg.daily_loss_limit
-        if self.journal.open_risk() + max_loss_per_contract > heat_cap:
+        open_risk = self.journal.open_risk()
+        max_by_heat = int(max(0.0, heat_cap - open_risk) // max_loss_per_contract)
+        if max_by_heat < 1:
             reasons.append(
-                f"portfolio heat: open risk {self.journal.open_risk():.2f} + "
+                f"portfolio heat: open risk {open_risk:.2f} + "
                 f"new {max_loss_per_contract:.2f} exceeds cap {heat_cap:.2f}"
             )
 
         allowed = not reasons
+        max_contracts = min(max_by_trade, max_by_heat)
         return RiskCheck(allowed, reasons, max_contracts if allowed else 0)

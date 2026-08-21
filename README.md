@@ -437,6 +437,195 @@ trades/config/6-months actually can: realized slippage vs the 0.5×
 half-spread assumption, daily-vs-weekly management uplift, and
 no-disaster confirmation — not statistical proof of a +$6/trade edge.
 
+## Income framework: the premium-selling playbook, measured
+
+`INCOME_AGENT_PROMPT.md` is the drop-in agent prompt for this pipeline;
+this section is what it is built on.
+
+A compact, widely-taught income framework — sell 20–30Δ short strikes at
+30–45 DTE, prefer IV rank above 30, collect a third of the width on
+condors, close winners at 50%, roll or close on an IV spike, risk 5–10% of
+the account per position — was implemented here in full. Five of its twelve
+rules were already what this repo does. Four collided with measurements
+already in this README. One is arithmetically impossible for the accounts
+it names.
+
+Both readings ship, in `options_trader/signals/income.py`:
+
+| profile | what it is |
+|---|---|
+| `as_specified` | The framework verbatim. Runnable, so its refusals are observable rather than argued about. |
+| `evidence_adjusted` | **Default.** The same framework with every parameter this repo has measured replaced by the measured answer, and nothing else changed. |
+
+### What changed, and why
+
+| framework rule | disposition | grounded in |
+|---|---|---|
+| close at 50% of credit | kept | already `profit_take_frac = 0.50` |
+| 30–45 DTE monthlies | kept | both profiles target 40 DTE |
+| enter Monday/Tuesday | kept | `IncomeProfile.entry_weekdays` |
+| confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. The delta is labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails. yfinance and the MCP provider publish no delta column, so live entries there are model-derived; `--provider uw` quotes a real delta per contract and reports `chain-quoted` |
+| report price/strike/expiry/credit/risk% | kept, extended | `TradeReport`, plus breakeven, dollar capital, IV rank |
+| 20–30Δ short strikes | **→ 10–15Δ** | the sweep measured 30Δ put spreads at −$47 to −$62/contract; farther-OTM helped monotonically, and only 10Δ and 15Δ survived both halves |
+| condors collect ⅓ of width | **→ 0.06–0.20** | SPY chains pay ~0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A 0.33 floor selects no trade, not a better one |
+| IV rank > 30 preferred | **→ recorded, not gating** | a hard IVR ≥ 50 filter made sweep results sharply worse; that test was at 50, so the question is open at 30 — hence record every entry's IV rank rather than trusting or discarding the rule |
+| roll or close on an IV spike | **→ graded WATCH/DEFEND/CLOSE** | an IV spike is when the buy-back price is most inflated. The nearest measured analogue, the breach stop, fired on 46% of trades, all losers, −$160 average |
+| never hold through events | **→ split in two** | unsatisfiable as written: every 30–45 DTE index position spans a CPI print and usually an FOMC. Now an entry blackout plus a span report with a checkable premium test |
+| 10%/7%/5% tiers by account size | kept, enforced literally | `risk/sizing.py` — and enforcing it is what surfaces the next row |
+| size so a full assignment fits | **impossible on an index** | below |
+
+### The sizing result
+
+`scripts/size_check.py` applies the framework's own tier schedule to its own
+structures, needing nothing but a spot price. With SPY at its 2026-08-20
+close of 762.60:
+
+```
+$ python scripts/size_check.py --equity 500 --spot 762.60
+
+equity $500.00 -> tier 10%, budget $50.00 per position
+
+defined-risk spread, 1-pt wide
+  capital at risk per contract : $80.00
+  equity needed for 1 contract : $1,600.00
+
+cash-secured put, 724.47 strike (5% OTM)
+  capital at risk per contract : $72,427.00
+  equity needed for 1 contract : $1,448,540.00
+```
+
+The 10% tier exists to serve accounts under $500. At current index prices
+that tier cannot fund the *narrowest possible defined-risk spread*, and a
+cash-secured put needs roughly **$1.4 million** of equity before one
+contract fits its own 5% cap. The schedule reads as though small accounts
+get more latitude; combined with "size so a full assignment stays within
+that limit" it does the opposite, most absolutely where the tier is most
+generous.
+
+`evidence_adjusted` responds by disabling index cash-secured puts by
+default (the structure stays configured for an underlying whose collateral
+actually fits) and adding a 20%-of-equity book-level cap, which the
+framework — capping positions but never the portfolio — omits entirely.
+
+### The measured geometry is the expensive one
+
+Worth stating because it cuts against the direction of every other change
+here: `evidence_adjusted` needs **more** capital than `as_specified`, not
+less. The sweep's surviving condor uses 4%-of-spot wings, which at SPY 762
+is a 30-point spread risking ~$2,900 per contract and needing ~$57,000 of
+equity at the 5% tier. The framework's 2% wings risk roughly half that.
+Farther-OTM shorts collect less premium, so the wing has to be wider for
+the structure to be worth opening at all — and a wider wing is a bigger max
+loss.
+
+So `configs/income_framework.json` runs a NOTIONAL $75,000 account, chosen
+so the default profile can actually carry its own primary variant. Like
+`configs/credit_paper.json`'s $50k, this is a paper-phase figure, not a
+recommendation: the paper phase measures fill quality and management
+uplift, and capitalization is a separate decision. Run
+`scripts/size_check.py` against your real equity before pointing any of
+this at real money.
+
+### What the framework left out
+
+No kill switch, no book-level cap, no roll budget, no assignment plan. The
+first is inherited from `RiskManager`; the rest are added
+(`portfolio_heat_cap_pct`, `IVSpikeConfig.max_rolls`,
+`CSPConfig.assignment_plan`).
+
+### Running it
+
+```bash
+python scripts/size_check.py --equity 25000 --spot 762.60 --width 5
+python scripts/scan_income.py --profile evidence_adjusted --provider mcp
+python scripts/scan_income.py --profile as_specified --dry-run   # see the refusals
+python scripts/manage_income.py --provider mcp
+
+# Unusual Whales live chains: real open interest AND a chain-quoted delta.
+# --underlying steps outside the validated universe on purpose; the wing is
+# refitted to that chain's strike grid and the report says it did.
+python scripts/scan_income.py --provider uw --underlying F --dry-run
+```
+
+Entries gate in the order that discards work soonest: cadence → vol regime
+(fails **closed**) → event blackout (fails **open**, and says so) →
+expiration → structure → **wing fit to the live strike grid** → **short
+delta within 1.5× of target** → IV rank → event span → RiskManager capacity
+→ sizing within it → report. Every stop is journaled as NO QUALIFYING TRADE
+naming the gate that produced it.
+
+Sizing asks the RiskManager for capacity *before* choosing a contract count,
+so the number in the report an operator confirms is the number that reaches
+the journal. `RiskCheck.max_contracts` is that capacity — the smaller of the
+per-trade cap and the room left under the portfolio-heat cap — not a verdict
+about a single contract.
+
+The two books share `journal.db` but are tagged separately (`strategy`
+`credit` vs `income`), so `manage_credit.py` and `manage_income.py` each
+manage only their own positions with their own variant registry. Both tags
+are in `journal.CREDIT_STRATEGIES`, which is what keeps `record_exit`
+flipping the P&L sign for premium sold rather than paid.
+
+Management is per-book; **reporting is account-wide**. `daily_digest.py`
+reads every book in `CREDIT_STRATEGIES` and totals open risk across them,
+because capital is shared even when management is not. Closed-trade stats
+stay broken out per book rather than pooled — the books run different
+variant registries and, off-index, different geometry, so one blended
+win-rate would describe no strategy that was actually traded.
+
+Management applies the 50% profit target and the time exit automatically,
+and **reports** the IV-spike grade without acting on it: the profit target
+has a backtested basis, the spike response does not, and the closest thing
+this repo did measure argued against it.
+
+### The geometry does not port to a cheap underlying
+
+Run against live Unusual Whales chains on 2026-08-21, `evidence_adjusted`
+behaves very differently on an index than on a $14 stock. Wings are
+configured as a fraction of spot; strike grids are absolute, so the
+resolution available to a wing collapses as price falls:
+
+| | SPY (762) | F (14.30) | CLSK (13.16) |
+|---|---|---|---|
+| near-money strike grid, measured | $1.00 | $0.50 | $0.50 |
+| 4% wing spans | 30.5 strikes | 1.14 strikes | 1.05 strikes |
+| wing after fitting | unchanged | 4% → **10.5%** | 4% → **11.6%** |
+| 30–45 DTE legs passing the liquidity gate | 55 | 0–2 | **0** |
+| short delta sold vs 0.10 target | 0.098 (1.0×) | **0.312 (3.1×)** | 0.079 (0.8×) |
+
+Three things that only showed up against real chains:
+
+- **The condor and the monthly put spread find no trade at all on F or
+  CLSK.** Not because the fit is wrong but because, after widening the wing
+  to something placeable, the credit no longer clears the floor. The
+  refusal is the correct answer and it is journaled as one.
+- **A fitted wing does not mean a fitted short strike.** F's weekly
+  selected a 0.312-delta put against a 0.10 target, because on a $0.50 grid
+  the nearest strike to 10Δ is three times that. Strike selection is
+  "nearest available", and on a coarse grid the nearest available strike is
+  not the strike the variant asked for. `short_delta_off_target()` now
+  refuses a short more than **1.5×** past its target
+  (`MAX_SHORT_DELTA_RATIO`), which stops that entry and leaves SPY — where
+  the measured shorts land at 0.98–1.04× — untouched. The guard is
+  one-sided on purpose: a short landing further OTM than asked sells less
+  premium than modelled, which `min_credit_frac` already judges.
+- **Unusual Whales omits greeks and NBBO for contracts that have not
+  traded**, returning nulls rather than zeros — 29 of 30 CLSK puts at the
+  42-DTE expiry. `UWLiveProvider` keeps those as NaN rather than coercing
+  to 0.0, because a missing delta is not a delta of zero; the historical
+  path (`day_chains`) still coerces with `float(r["delta"] or 0)`, which
+  would read a dead contract as deep OTM.
+
+### What this is not
+
+`evidence_adjusted` is better-grounded, not proven. Its parent variants'
+edge is statistically indistinguishable from breakeven (t < 1, best-of-16
+selection bias), 78% of backtest exits were model-marked, and its 30–45 DTE
+window is narrower than the 25–50 the sweep actually ran. Treat it as the
+least-unsupported version of this framework. The event calendar ships
+**empty** on purpose — see `configs/events_TEMPLATE.json`; fabricated FOMC
+dates would blacklist the wrong days and clear the right ones.
+
 ## Calibration study: do the model's numbers predict reality?
 
 Every candidate carries model outputs — `p_win`/`p_loss` from N(d2) at
