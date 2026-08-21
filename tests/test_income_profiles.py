@@ -5,7 +5,9 @@ that the framework's own numbers behave as the docs claim on a chain."""
 import pandas as pd
 import pytest
 
-from options_trader.signals.credit import build_position
+from options_trader.signals.credit import (
+    build_position, short_delta_off_target,
+)
 from options_trader.signals.income import (
     AS_SPECIFIED, DEFAULT_PROFILE, EVIDENCE_ADJUSTED, PROFILES,
     fit_wing_to_grid, get_profile, infer_strike_grid, with_underlying_scale,
@@ -341,3 +343,87 @@ class TestFitWingToGrid:
         assert fitted.short_put_delta == v.short_put_delta
         assert fitted.min_dte == v.min_dte
         assert fitted.min_credit_frac == v.min_credit_frac
+
+
+class TestShortDeltaGuard:
+    """Fitting the WING to the strike grid does not fit the SHORT.
+
+    Strike selection is "nearest available". On a $1.00 index grid that
+    lands on target; on a $0.50 grid at a $14 spot the nearest strike to
+    0.10 delta was measured at 0.312 (F, 2026-08-21) — three times the
+    risk, under a variant named for 10 delta.
+    """
+
+    @staticmethod
+    def _pos(legs):
+        from options_trader.signals.credit import CreditLeg, CreditPosition
+        return CreditPosition(
+            underlying="X", variant="v", entry_date="2026-08-21",
+            expiration="2026-09-30", dte_at_entry=40, spot_at_entry=14.30,
+            legs=[CreditLeg(*a) for a in legs], credit=0.09, credit_mid=0.10,
+        )
+
+    def _put_spread(self, short_delta):
+        return self._pos([("put", 14.0, -1, 0.08, 0.10, -short_delta, 0.35),
+                          ("put", 13.5, +1, 0.03, 0.05, -0.05, 0.38)])
+
+    def test_an_on_target_short_passes(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert short_delta_off_target(self._put_spread(0.098), cfg) is None
+
+    def test_the_measured_f_case_is_refused(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        reason = short_delta_off_target(self._put_spread(0.312), cfg)
+        assert reason is not None
+        assert "0.312 delta" in reason and "0.10 target" in reason
+        assert "3.1x" in reason
+
+    def test_exactly_at_the_limit_passes(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert short_delta_off_target(self._put_spread(0.150), cfg) is None
+
+    def test_just_past_the_limit_is_refused(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert short_delta_off_target(self._put_spread(0.151), cfg) is not None
+
+    def test_a_further_otm_short_is_not_refused(self):
+        """The low side sells less premium than modelled, which
+        min_credit_frac already judges. This guard is risk-increasing only."""
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert short_delta_off_target(self._put_spread(0.079), cfg) is None
+
+    def test_a_missing_delta_is_left_to_the_confirmation_gate(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert short_delta_off_target(self._put_spread(float("nan")),
+                                      cfg) is None
+        assert short_delta_off_target(self._put_spread(0.0), cfg) is None
+
+    def test_the_call_side_of_a_condor_is_checked_too(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_condor15"]
+        pos = self._pos([("put", 14.0, -1, 0.08, 0.10, -0.15, 0.35),
+                         ("put", 13.5, +1, 0.03, 0.05, -0.05, 0.38),
+                         ("call", 15.0, -1, 0.08, 0.10, 0.40, 0.35),
+                         ("call", 15.5, +1, 0.03, 0.05, 0.20, 0.38)])
+        reason = short_delta_off_target(pos, cfg)
+        assert reason is not None and "call" in reason
+
+    def test_a_put_spread_ignores_the_absent_call_target(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        assert cfg.short_call_delta is None
+        pos = self._pos([("put", 14.0, -1, 0.08, 0.10, -0.09, 0.35),
+                         ("put", 13.5, +1, 0.03, 0.05, -0.05, 0.38),
+                         ("call", 15.0, -1, 0.08, 0.10, 0.90, 0.35)])
+        assert short_delta_off_target(pos, cfg) is None
+
+    def test_long_wings_are_never_judged(self):
+        """A wing is bought, not sold; its delta is not a risk target."""
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        pos = self._pos([("put", 14.0, -1, 0.08, 0.10, -0.09, 0.35),
+                         ("put", 13.5, +1, 0.03, 0.05, -0.99, 0.38)])
+        assert short_delta_off_target(pos, cfg) is None
+
+    def test_the_tolerance_is_adjustable(self):
+        cfg = EVIDENCE_ADJUSTED.variants["income_put10"]
+        pos = self._put_spread(0.25)
+        assert short_delta_off_target(pos, cfg, max_ratio=3.0) is None
+        assert short_delta_off_target(pos, cfg, max_ratio=1.5) is not None
