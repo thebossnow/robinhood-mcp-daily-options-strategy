@@ -156,13 +156,15 @@ the shipped defaults:
    from realized absolute moves on past FOMC and CPI days for the traded
    underlying. Until then, treat a failing premium test as a caution, not
    a verdict.
-5. **Nothing checks the short strike against its target delta.** The wing
-   is fitted to the grid; the short leg is still "nearest available", which
-   on a $0.50 grid put a 0.312-delta put in a 0.10-delta variant (F,
-   2026-08-21). The report prints the delta it sold, so this is disclosed
-   rather than hidden, but a tolerance that refuses or flags a short more
-   than ~1.5× its target is not written yet. Deciding that tolerance is a
-   strategy choice, not a bug fix, which is why it is here and not in code.
+5. **The short-delta tolerance is a judgement, not a measurement.**
+   `short_delta_off_target()` refuses a short landing more than
+   `MAX_SHORT_DELTA_RATIO` (1.5×) past its target delta — the case that
+   put a 0.312-delta put in a 0.10-delta variant on F. Nothing backtested
+   1.5×; it was chosen to catch a 2-3× miss while leaving the ordinary
+   rounding on a $1.00 index grid (measured 0.98-1.04× on SPY) alone. The
+   guard is deliberately one-sided: a short landing *further* OTM than
+   asked is left to `min_credit_frac`. If a sweep ever measures the P&L
+   cost of off-target shorts, that number should replace this one.
 
 ## What would make this trustworthy
 

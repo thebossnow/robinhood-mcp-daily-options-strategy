@@ -549,9 +549,10 @@ python scripts/scan_income.py --provider uw --underlying F --dry-run
 
 Entries gate in the order that discards work soonest: cadence → vol regime
 (fails **closed**) → event blackout (fails **open**, and says so) →
-expiration → structure → **wing fit to the live strike grid** → IV rank →
-event span → RiskManager capacity → sizing within it → report. Every stop is
-journaled as NO QUALIFYING TRADE naming the gate that produced it.
+expiration → structure → **wing fit to the live strike grid** → **short
+delta within 1.5× of target** → IV rank → event span → RiskManager capacity
+→ sizing within it → report. Every stop is journaled as NO QUALIFYING TRADE
+naming the gate that produced it.
 
 Sizing asks the RiskManager for capacity *before* choosing a contract count,
 so the number in the report an operator confirms is the number that reaches
@@ -591,10 +592,16 @@ Three things that only showed up against real chains:
   CLSK.** Not because the fit is wrong but because, after widening the wing
   to something placeable, the credit no longer clears the floor. The
   refusal is the correct answer and it is journaled as one.
-- **A fitted wing does not mean a fitted short strike.** F's weekly sold a
-  0.312-delta put against a 0.10 target, because on a $0.50 grid the
-  nearest strike to 10Δ is three times that. The report discloses the
-  delta it sold; nothing yet *flags* the distance from target.
+- **A fitted wing does not mean a fitted short strike.** F's weekly
+  selected a 0.312-delta put against a 0.10 target, because on a $0.50 grid
+  the nearest strike to 10Δ is three times that. Strike selection is
+  "nearest available", and on a coarse grid the nearest available strike is
+  not the strike the variant asked for. `short_delta_off_target()` now
+  refuses a short more than **1.5×** past its target
+  (`MAX_SHORT_DELTA_RATIO`), which stops that entry and leaves SPY — where
+  the measured shorts land at 0.98–1.04× — untouched. The guard is
+  one-sided on purpose: a short landing further OTM than asked sells less
+  premium than modelled, which `min_credit_frac` already judges.
 - **Unusual Whales omits greeks and NBBO for contracts that have not
   traded**, returning nulls rather than zeros — 29 of 30 CLSK puts at the
   42-DTE expiry. `UWLiveProvider` keeps those as NaN rather than coercing

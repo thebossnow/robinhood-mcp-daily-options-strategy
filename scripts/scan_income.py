@@ -47,7 +47,9 @@ from options_trader.risk.sizing import (
     csp_capital_at_risk, size_position, spread_capital_at_risk,
 )
 from options_trader.risk.vol_regime import check_vol_regime, fetch_vix_closes
-from options_trader.signals.credit import build_position, leg_passes_live_liquidity
+from options_trader.signals.credit import (
+    build_position, leg_passes_live_liquidity, short_delta_off_target,
+)
 from options_trader.signals.csp import build_csp
 from options_trader.signals.income import (
     DEFAULT_PROFILE, PROFILES, TYPICAL_STRIKE_GRID, fit_wing_to_grid,
@@ -237,6 +239,16 @@ def main() -> int:
                           f"of width, {vcfg.short_put_delta or 0:.2f}/"
                           f"{vcfg.short_call_delta or 0:.2f} delta targets)",
                           args.dry_run)
+            continue
+
+        # 5b. The strike selected is "nearest available", which on a coarse
+        # grid is not necessarily the strike the variant asked for. Fitting
+        # the WING to the grid does not fit the SHORT; this refuses a short
+        # carrying materially more risk than its own delta target names.
+        off_target = short_delta_off_target(pos, vcfg)
+        if off_target:
+            _journal_skip(journal, f"{name}: NO QUALIFYING TRADE — "
+                          f"{off_target}", args.dry_run)
             continue
 
         # 6. IV rank — recorded always
