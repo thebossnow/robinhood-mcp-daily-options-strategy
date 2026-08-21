@@ -566,6 +566,13 @@ manage only their own positions with their own variant registry. Both tags
 are in `journal.CREDIT_STRATEGIES`, which is what keeps `record_exit`
 flipping the P&L sign for premium sold rather than paid.
 
+Management is per-book; **reporting is account-wide**. `daily_digest.py`
+reads every book in `CREDIT_STRATEGIES` and totals open risk across them,
+because capital is shared even when management is not. Closed-trade stats
+stay broken out per book rather than pooled — the books run different
+variant registries and, off-index, different geometry, so one blended
+win-rate would describe no strategy that was actually traded.
+
 Management applies the 50% profit target and the time exit automatically,
 and **reports** the IV-spike grade without acting on it: the profit target
 has a backtested basis, the spike response does not, and the closest thing

@@ -4,6 +4,9 @@ refusal to claim confirmation that did not happen."""
 import pandas as pd
 import pytest
 
+from options_trader.reporting.trade_report import (
+    ConfirmationLine, _measured_delta, _measured_iv,
+)
 from options_trader.reporting import (
     ConfirmationLine, report_credit_position, report_csp_position,
 )
@@ -186,3 +189,59 @@ class TestCSPReport:
         _, sizing, rep = self._report(equity=25_000.0)
         assert sizing.contracts == 0
         assert rep.risk_pct == 0.0
+
+
+class TestMeasuredVersusMissing:
+    """The confirmation gate distinguishes "measured" from "absent". It
+    used to use truthiness, which got both ends wrong: 0.0 (a measurement)
+    read as absent, and NaN (absent) is truthy in Python so it read as a
+    measurement and rendered `at nan delta` above the word "confirmed"."""
+
+    def test_a_zero_delta_is_a_measurement(self):
+        assert _measured_delta(0.0) == 0.0
+
+    def test_a_nan_delta_is_not(self):
+        assert _measured_delta(float("nan")) is None
+
+    def test_a_missing_delta_is_not(self):
+        assert _measured_delta(None) is None
+
+    def test_an_ordinary_delta_survives(self):
+        assert _measured_delta(-0.15) == -0.15
+
+    def test_a_zero_iv_is_the_repos_missing_sentinel(self):
+        """Every provider coerces an absent IV to 0.0, so unlike delta,
+        zero here means the field was not published."""
+        assert _measured_iv(0.0) is None
+
+    def test_a_nan_or_negative_iv_is_missing(self):
+        assert _measured_iv(float("nan")) is None
+        assert _measured_iv(-0.1) is None
+
+    def test_an_ordinary_iv_survives(self):
+        assert _measured_iv(0.18) == 0.18
+
+    def test_a_nan_delta_can_never_render_as_confirmed(self):
+        line = ConfirmationLine(short_strike=700.0,
+                                short_delta=_measured_delta(float("nan")),
+                                short_iv=_measured_iv(0.20),
+                                delta_source="chain")
+        assert not line.confirmed
+        assert "NOT CONFIRMED" in line.render()
+        assert "nan" not in line.render()
+
+    def test_a_zero_delta_with_a_real_iv_confirms(self):
+        line = ConfirmationLine(short_strike=700.0,
+                                short_delta=_measured_delta(0.0),
+                                short_iv=_measured_iv(0.20),
+                                delta_source="model")
+        assert line.confirmed
+        assert "0.00 delta" in line.render()
+
+    def test_a_leg_with_neither_still_fails(self):
+        line = ConfirmationLine(short_strike=700.0,
+                                short_delta=_measured_delta(None),
+                                short_iv=_measured_iv(0.0),
+                                delta_source="none")
+        assert not line.confirmed
+        assert "no delta and no IV" in line.render()
