@@ -221,6 +221,82 @@ def get_profile(name: str) -> IncomeProfile:
     return PROFILES[name]
 
 
+# Typical near-the-money strike increments. Used only to report what
+# geometry an underlying can actually express -- always verify against the
+# live chain, since increments widen away from the money and change with
+# price level.
+TYPICAL_STRIKE_GRID: dict[str, float] = {
+    "SPY": 1.00, "QQQ": 1.00, "IWM": 1.00, "XSP": 1.00,
+    "F": 0.50, "CLSK": 0.50,
+}
+
+
+def min_wing_frac(spot: float, strike_grid: float,
+                  min_increments: int = 3) -> float:
+    """Narrowest wing, as a fraction of spot, that still spans
+    `min_increments` strikes.
+
+    Wings are configured as a fraction of spot so the geometry ports across
+    underlyings. It does not port, and this function is how you find out
+    before a backtest quietly tells you. Strike GRIDS are absolute, so the
+    resolution available to a wing collapses as price falls:
+
+        SPY at 762 on a $1.00 grid  -> a 4% wing spans 30 strikes
+        F   at  14 on a $0.50 grid  -> a 4% wing spans 1.1 strikes
+
+    A one-increment wing is the narrowest spread that exists; it is not
+    "the 4% geometry, scaled". On a low-priced name the narrowest USABLE
+    wing is already ~10% of spot, which is a structurally different trade:
+    far more of the distribution sits inside the wings, so max loss is much
+    larger relative to the credit than anything this repo has validated.
+    """
+    if spot <= 0 or strike_grid <= 0:
+        raise ValueError("spot and strike_grid must be positive")
+    return (min_increments * strike_grid) / spot
+
+
+def wing_increments(spot: float, strike_grid: float,
+                    wing_width_frac: float) -> float:
+    """How many strike increments a configured wing fraction spans.
+    Below ~2 the wing is not really placeable: it rounds onto the short
+    strike or one tick past it."""
+    if strike_grid <= 0:
+        raise ValueError("strike_grid must be positive")
+    return (wing_width_frac * spot) / strike_grid
+
+
+def scaled_for_underlying(profile: IncomeProfile, spot: float,
+                          strike_grid: float,
+                          min_increments: int = 3) -> IncomeProfile:
+    """Rescale a profile's wings to the narrowest width this underlying can
+    actually place, when the configured width is too narrow to exist.
+
+    Widens only -- a wing already spanning `min_increments` is left alone,
+    because widening past what was validated is its own risk. The returned
+    profile carries a note recording what changed, so a backtest run on it
+    cannot be mistaken for a run of the original geometry.
+    """
+    floor = min_wing_frac(spot, strike_grid, min_increments)
+    variants = {}
+    changed = []
+    for name, v in profile.variants.items():
+        if v.wing_width_frac >= floor:
+            variants[name] = v
+            continue
+        variants[name] = replace(v, wing_width_frac=floor)
+        changed.append(f"{name} {v.wing_width_frac:.1%}->{floor:.1%}")
+    notes = list(profile.notes)
+    if changed:
+        notes.append(
+            f"WINGS RESCALED for spot {spot:.2f} on a {strike_grid:.2f} "
+            f"strike grid ({', '.join(changed)}): the configured widths span "
+            f"under {min_increments} strikes there and cannot be placed. "
+            f"This is NOT the validated geometry — results are not "
+            f"comparable to the SPY sweep."
+        )
+    return replace(profile, variants=variants, notes=notes)
+
+
 def with_underlying_scale(profile: IncomeProfile,
                           wing_width_frac: float) -> IncomeProfile:
     """Same profile with every variant's wing width rescaled.
