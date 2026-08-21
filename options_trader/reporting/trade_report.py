@@ -32,6 +32,44 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+def _measured_delta(value: float | None) -> float | None:
+    """The leg's delta if one was actually measured, else None.
+
+    Not a truthiness test, which this used to be, and which got both ends
+    wrong. A delta of exactly 0.0 is a MEASUREMENT -- the model saying this
+    strike is worthless -- so it must not be reported as "no delta"; the
+    reason not to sell it is that it pays nothing, which `min_credit_frac`
+    judges, not that nobody knows what it is. A delta of NaN is the
+    opposite and is truthy in Python, so the old expression passed it
+    straight through into a report that rendered `at nan delta` above the
+    word "confirmed". `UWLiveProvider` makes NaN reachable on purpose: it
+    keeps the feed's nulls as nulls rather than coercing them to zero.
+
+    Today `_pick_short` filters on `abs_delta > 0`, so neither value can
+    reach here through `build_position` or `build_csp`. This is the gate
+    that says "do not sell what you cannot measure", so it checks rather
+    than trusting a caller two modules away to keep filtering.
+    """
+    if value is None or value != value:      # None or NaN
+        return None
+    return value
+
+
+def _measured_iv(value: float | None) -> float | None:
+    """The leg's IV if one was measured, else None.
+
+    Asymmetric with `_measured_delta` on purpose: 0.0 is this repo's
+    MISSING sentinel for IV, not a measurement. Every provider coerces an
+    absent IV to 0.0 (`provider.py` fillna, the three importers' `or 0`),
+    and `iv_rank.atm_iv` already skips `iv == 0` rows for the same reason.
+    A genuinely zero-vol option does not exist; a feed that omitted the
+    field does.
+    """
+    if value is None or value != value or value <= 0.0:
+        return None
+    return value
+
+
 @dataclass
 class ConfirmationLine:
     """The pre-sale IV/delta confirmation, and whether it actually happened.
@@ -195,8 +233,8 @@ def report_credit_position(pos, sizing, equity: float, structure: str,
         breakeven=breakeven,
         confirmation=ConfirmationLine(
             short_strike=short.strike if short else None,
-            short_delta=(short.entry_delta if short and short.entry_delta else None),
-            short_iv=(short.entry_iv if short and short.entry_iv else None),
+            short_delta=_measured_delta(short.entry_delta if short else None),
+            short_iv=_measured_iv(short.entry_iv if short else None),
             iv_rank_note=iv_rank_note,
             delta_source=getattr(short, "delta_source", "none") if short else "none"),
         event_note=event_note, notes=list(notes or []),
@@ -224,8 +262,8 @@ def report_csp_position(pos, sizing, equity: float, iv_rank_note: str = "",
         breakeven=pos.breakeven,
         confirmation=ConfirmationLine(
             short_strike=pos.strike,
-            short_delta=pos.entry_delta or None,
-            short_iv=pos.entry_iv or None,
+            short_delta=_measured_delta(pos.entry_delta),
+            short_iv=_measured_iv(pos.entry_iv),
             iv_rank_note=iv_rank_note,
             delta_source=getattr(pos, "delta_source", "chain")),
         event_note=event_note, notes=extra,
