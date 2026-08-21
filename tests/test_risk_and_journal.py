@@ -144,3 +144,67 @@ class TestJournal:
         closed = journal.closed_trades()
         assert {r.id for r in closed} == {closed_id, expired_id}
         assert open_id not in {r.id for r in closed}
+
+
+class TestRiskCapacityIsContractAware:
+    """`RiskCheck.max_contracts` is the number of contracts the book can
+    absorb, not a verdict about one contract.
+
+    Before this was pinned, the portfolio-heat cap compared open risk plus
+    exactly ONE contract's risk against the cap, then handed back a
+    `max_contracts` derived only from the per-trade cap. A caller sizing
+    from the tier schedule (scripts/scan_income.py) could clear the gate
+    with a 1-contract test and then open N, adding N times the risk the cap
+    was written to bound.
+    """
+
+    def test_heat_room_limits_capacity_not_just_permission(self, cfg, journal):
+        # cfg: $10k equity -> daily_loss_limit $200 -> heat cap $400.
+        # Per-trade cap is 1% = $100, so a $50 spread allows 2 by trade cap.
+        # With $300 already at risk, only $100 of room is left -> 2 contracts.
+        journal.record_entry(_fake_candidate(), 5, entry_debit=0.60)  # $300
+        check = RiskManager(cfg, journal).check(50.0)
+        assert check.allowed
+        assert check.max_contracts == 2
+
+    def test_capacity_shrinks_as_the_book_fills(self, cfg, journal):
+        journal.record_entry(_fake_candidate(), 6, entry_debit=0.60)  # $360
+        check = RiskManager(cfg, journal).check(50.0)
+        # Only $40 of heat room left: not even one contract fits.
+        assert not check.allowed
+        assert any("portfolio heat" in r for r in check.reasons)
+
+    def test_capacity_never_exceeds_the_per_trade_cap(self, cfg, journal):
+        # Empty book: heat room is the full $400, which would allow 8
+        # contracts at $50 -- but the per-trade cap of $100 allows 2.
+        check = RiskManager(cfg, journal).check(50.0)
+        assert check.allowed
+        assert check.max_contracts == 2
+
+    def test_a_full_book_still_refuses_a_single_contract(self, cfg, journal):
+        journal.record_entry(_fake_candidate(), 7, entry_debit=0.60)  # $420
+        check = RiskManager(cfg, journal).check(60.0)
+        assert not check.allowed
+        assert check.max_contracts == 0
+
+    def test_broker_clamp_now_bounds_total_book_risk(self, cfg, journal):
+        """The clamp in PaperBroker.open_credit consumes this capacity, so
+        an oversized request lands inside the heat cap instead of N times
+        past it."""
+        from options_trader.execution.paper import PaperBroker
+        from options_trader.signals.credit import CreditLeg, CreditPosition
+
+        journal.record_entry(_fake_candidate(), 5, entry_debit=0.60)  # $300
+        broker = PaperBroker(cfg, journal)
+        pos = CreditPosition(
+            underlying="TEST", variant="v", entry_date="2026-08-21",
+            expiration="2026-09-30", dte_at_entry=40, spot_at_entry=100.0,
+            legs=[CreditLeg("put", 95.0, -1, 1.00, 1.10, -0.15, 0.20),
+                  CreditLeg("put", 94.0, +1, 0.50, 0.60, -0.08, 0.22)],
+            credit=0.50, credit_mid=0.55, credit_frac=0.50,
+        )
+        pos.max_loss = 0.50          # $50 per contract
+        tid, check = broker.open_credit(pos, contracts=99)
+        assert tid is not None
+        # $300 open + 2 x $50 = $400, exactly the cap -- not $300 + 99x$50.
+        assert journal.open_risk() == pytest.approx(400.0)

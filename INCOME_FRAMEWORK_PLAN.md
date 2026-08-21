@@ -41,6 +41,8 @@ the module docstring with the specific finding it rests on.
 | graded IV-spike response | `risk/iv_spike.py` | done, 16 tests |
 | trade report contract | `reporting/trade_report.py` | done, 16 tests |
 | profiles + cadence | `signals/income.py` | done, 29 tests |
+| wing fit to strike grid | `signals/income.py` | done, wired into the scanner, 19 tests |
+| live UW chains | `data/unusual_whales.py` | `UWLiveProvider`, `--provider uw` |
 | entry scanner | `scripts/scan_income.py` | done, end-to-end tested |
 | daily management | `scripts/manage_income.py` | done |
 | feasibility CLI | `scripts/size_check.py` | done |
@@ -142,14 +144,25 @@ the shipped defaults:
    `configs/events.json` exists with real dates. The scanner says so on
    every run rather than implying the calendar was clean.
 3. **Cash-secured puts.** Disabled by default on the index for the reason
-   in the README. Re-enabling for a cheaper underlying needs
-   `with_underlying_scale()` so the wings land on real strikes, plus a
-   decision on the assignment plan (`wheel` vs `close`).
+   in the README. Wings now fit themselves to the live strike grid
+   (`fit_wing_to_grid`, applied per variant in the scanner), so re-enabling
+   for a cheaper underlying no longer needs a hand-picked
+   `with_underlying_scale()` fraction — it needs a decision on the
+   assignment plan (`wheel` vs `close`), and an underlying whose chain
+   actually passes the liquidity gate. Measured 2026-08-21: F and CLSK do
+   not, at 30–45 DTE.
 4. **`typical_event_move_pct` is a placeholder.** `premium_compensates()`
    defaults to 1% of spot per macro event. The honest version is measured
    from realized absolute moves on past FOMC and CPI days for the traded
    underlying. Until then, treat a failing premium test as a caution, not
    a verdict.
+5. **Nothing checks the short strike against its target delta.** The wing
+   is fitted to the grid; the short leg is still "nearest available", which
+   on a $0.50 grid put a 0.312-delta put in a 0.10-delta variant (F,
+   2026-08-21). The report prints the delta it sold, so this is disclosed
+   rather than hidden, but a tolerance that refuses or flags a short more
+   than ~1.5× its target is not written yet. Deciding that tolerance is a
+   strategy choice, not a bug fix, which is why it is here and not in code.
 
 ## What would make this trustworthy
 

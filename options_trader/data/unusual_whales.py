@@ -35,7 +35,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from .provider import ChainSnapshot, CHAIN_COLUMNS
+from .provider import ChainSnapshot, CHAIN_COLUMNS, DataProvider
 from .dolthub import build_spot_lookup  # noqa: F401  (re-exported for callers)
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,96 @@ class UWClient:
             resp.raise_for_status()
             return resp.json().get("data", [])
         raise RuntimeError("UW API: retries exhausted")
+
+
+class UWLiveProvider(DataProvider):
+    """Live chains from Unusual Whales, as a normal `DataProvider`.
+
+    The rest of this module serves historical backtests. This class serves
+    the live scanners, and it exists because UW is the only source wired
+    here that publishes BOTH real open interest and a real delta per
+    contract. yfinance gives OI but no delta, so every live entry has had
+    to model its delta from IV; with this provider the trade report's
+    confirmation line can read `chain-quoted` instead of `model-derived`.
+
+    Two costs worth knowing before choosing it:
+
+      * One call returns every expiration at once, so `get_chain` is served
+        from a per-underlying cache built on first use. That makes a scan
+        of several expirations cheap, and makes the snapshot's `taken_at`
+        the time of the FETCH, not of each expiration.
+      * UW omits greeks and NBBO entirely for contracts that have not
+        traded recently, returning nulls rather than zeros. Those become
+        NaN here, not 0.0: a missing delta is not a delta of zero, and
+        coercing it would manufacture a deep-OTM-looking strike out of a
+        contract nobody has quoted. `_with_deltas` falls back to the model
+        when a whole side is missing, and `leg_passes_live_liquidity`
+        drops the individual dead rows.
+    """
+
+    def __init__(self, api_key: str | None = None,
+                 client: UWClient | None = None):
+        self.client = client or UWClient(api_key or load_api_key("UW_API_KEY"))
+        self._rows: dict[str, list[dict]] = {}
+        self._fetched_at: dict[str, str] = {}
+
+    def _all_rows(self, underlying: str) -> list[dict]:
+        symbol = _check_symbol(underlying)
+        if symbol not in self._rows:
+            self._rows[symbol] = self.client.option_chains(symbol, greeks=True)
+            self._fetched_at[symbol] = pd.Timestamp.now().isoformat(
+                timespec="seconds")
+        return self._rows[symbol]
+
+    def get_spot(self, underlying: str) -> float:
+        symbol = _check_symbol(underlying)
+        headers = {"Authorization": f"Bearer {self.client.api_key}",
+                   "Accept": "application/json"}
+        resp = requests.get(f"{API_BASE}/api/stock/{symbol}/stock-state",
+                            headers=headers, timeout=30)
+        resp.raise_for_status()
+        close = resp.json().get("data", {}).get("close")
+        if close in (None, ""):
+            raise RuntimeError(f"No spot price for {symbol}")
+        return float(close)
+
+    def get_expirations(self, underlying: str) -> list[str]:
+        return sorted({str(r["expires"])[:10]
+                       for r in self._all_rows(underlying)})
+
+    def get_chain(self, underlying: str, expiration: str) -> ChainSnapshot:
+        symbol = _check_symbol(underlying)
+        rows = [r for r in self._all_rows(symbol)
+                if str(r["expires"])[:10] == expiration]
+        records = [{
+            "type": str(r["option_type"]).strip().lower(),
+            "strike": float(r["strike"]),
+            "bid": _num(r.get("nbbo_bid")) or 0.0,
+            "ask": _num(r.get("nbbo_ask")) or 0.0,
+            "volume": int(r.get("volume") or 0),
+            "open_interest": int(r.get("open_interest") or 0),
+            "iv": _num(r.get("implied_volatility")) or 0.0,
+            # NaN, deliberately, when UW quotes no delta -- see class docstring.
+            "delta": _num(r.get("delta")),
+        } for r in rows]
+        chain = pd.DataFrame(records, columns=[*CHAIN_COLUMNS, "delta"])
+        return ChainSnapshot(
+            underlying=symbol,
+            spot=self.get_spot(symbol),
+            expiration=expiration,
+            taken_at=self._fetched_at.get(symbol,
+                                          pd.Timestamp.now().isoformat(
+                                              timespec="seconds")),
+            chain=chain,
+        )
+
+
+def _num(value) -> float:
+    """UW sends numbers as strings and missing data as null. Missing stays
+    missing (NaN) rather than becoming a spurious 0.0."""
+    if value is None or value == "":
+        return float("nan")
+    return float(value)
 
 
 class UWImporter:

@@ -144,6 +144,14 @@ AS_SPECIFIED = IncomeProfile(
     csp=CSPConfig(name="spec_csp_25d", short_put_delta=0.25, min_dte=30,
                   max_dte=45, target_dte=38, profit_take_frac=0.50),
     min_iv_rank=0.30,          # "ideally above 30"
+    # The framework says IV RANK, so this profile gates on IV rank. The
+    # dataclass default is percentile, which is the better statistic and the
+    # one EVIDENCE_ADJUSTED records -- but silently substituting it here
+    # would make the verbatim profile gate on something the framework never
+    # said, in the direction that passes MORE trades: after a single vol
+    # spike, rank sits near zero for a year while percentile stays high
+    # (tests/test_iv_rank.py::test_single_spike_crushes_rank_but_not_percentile).
+    iv_rank_use_percentile=False,
     portfolio_heat_cap_pct=None,
     allow_cash_secured_puts=True,
     notes=[
@@ -154,6 +162,9 @@ AS_SPECIFIED = IncomeProfile(
         "and outside any window this repo has backtested.",
         "No book-level risk cap: three 10%-tier positions is 30% of the "
         "account on correlated short premium.",
+        "Gates on IV RANK, literally as written — not the percentile the "
+        "adjusted profile prefers. After one vol spike this refuses trades "
+        "for a year that percentile would pass.",
     ],
 )
 
@@ -197,6 +208,10 @@ EVIDENCE_ADJUSTED = IncomeProfile(
                   max_dte=45, target_dte=40, profit_take_frac=0.50),
     allow_cash_secured_puts=False,
     min_iv_rank=None,          # recorded on every entry, never gating
+    # Moot while min_iv_rank is None, but stated rather than defaulted: if
+    # an operator ever sets a threshold here, it should be measured against
+    # the distribution-aware statistic, not the spike-sensitive one.
+    iv_rank_use_percentile=True,
     portfolio_heat_cap_pct=0.20,
     notes=[
         "IV rank is recorded on every entry but gates nothing: the nearest "
@@ -265,6 +280,69 @@ def wing_increments(spot: float, strike_grid: float,
     return (wing_width_frac * spot) / strike_grid
 
 
+def infer_strike_grid(chain, spot: float, band: float = 0.15) -> float | None:
+    """The modal gap between adjacent strikes near the money, measured on
+    the chain in hand.
+
+    TYPICAL_STRIKE_GRID is a table of guesses; this is the answer. They
+    differ in the case that matters: a chain's NOMINAL grid is not the grid
+    a spread can actually be built on, because far-OTM strikes and illiquid
+    strikes widen the effective spacing. Measuring on the same rows the
+    scanner is about to select from is the only way the number describes
+    the trade being placed.
+
+    Returns None when fewer than two strikes sit within `band` of spot,
+    which is itself the finding — there is no local grid to speak of.
+    """
+    if spot <= 0:
+        raise ValueError("spot must be positive")
+    try:
+        strikes = sorted({float(k) for k in chain["strike"]
+                          if (1.0 - band) * spot <= float(k) <= (1.0 + band) * spot})
+    except (KeyError, TypeError):
+        return None
+    if len(strikes) < 2:
+        return None
+    gaps: dict[float, int] = {}
+    for a, b in zip(strikes, strikes[1:]):
+        g = round(b - a, 4)
+        if g > 0:
+            gaps[g] = gaps.get(g, 0) + 1
+    if not gaps:
+        return None
+    # Modal gap, ties broken toward the WIDER spacing: assuming the tighter
+    # grid would understate how coarse the placeable geometry really is.
+    top = max(gaps.values())
+    return max(g for g, n in gaps.items() if n == top)
+
+
+def fit_wing_to_grid(vcfg: CreditVariantConfig, spot: float,
+                     strike_grid: float, min_increments: int = 3
+                     ) -> tuple[CreditVariantConfig, str | None]:
+    """Widen one variant's wing to the narrowest width this grid can place.
+
+    Returns `(config, note)` — `note` is None when the configured geometry
+    already fits, and otherwise says what changed and that the result is no
+    longer the validated geometry. Widens only, never narrows: a wing that
+    already spans `min_increments` is left exactly as measured.
+
+    This is the single implementation; `scaled_for_underlying` maps it over
+    a whole profile, and scan_income.py applies it per variant against the
+    live chain's own grid.
+    """
+    floor = min_wing_frac(spot, strike_grid, min_increments)
+    if vcfg.wing_width_frac >= floor:
+        return vcfg, None
+    note = (
+        f"WING RESCALED {vcfg.wing_width_frac:.1%}->{floor:.1%} of spot: at "
+        f"{spot:.2f} on a {strike_grid:.2f} strike grid the configured wing "
+        f"spans {wing_increments(spot, strike_grid, vcfg.wing_width_frac):.2f} "
+        f"strikes, under the {min_increments} needed to place it. This is NOT "
+        f"the validated geometry — results are not comparable to the SPY sweep."
+    )
+    return replace(vcfg, wing_width_frac=floor), note
+
+
 def scaled_for_underlying(profile: IncomeProfile, spot: float,
                           strike_grid: float,
                           min_increments: int = 3) -> IncomeProfile:
@@ -280,11 +358,10 @@ def scaled_for_underlying(profile: IncomeProfile, spot: float,
     variants = {}
     changed = []
     for name, v in profile.variants.items():
-        if v.wing_width_frac >= floor:
-            variants[name] = v
-            continue
-        variants[name] = replace(v, wing_width_frac=floor)
-        changed.append(f"{name} {v.wing_width_frac:.1%}->{floor:.1%}")
+        fitted, note = fit_wing_to_grid(v, spot, strike_grid, min_increments)
+        variants[name] = fitted
+        if note is not None:
+            changed.append(f"{name} {v.wing_width_frac:.1%}->{floor:.1%}")
     notes = list(profile.notes)
     if changed:
         notes.append(

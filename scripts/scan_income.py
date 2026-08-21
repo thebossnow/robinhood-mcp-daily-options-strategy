@@ -49,7 +49,10 @@ from options_trader.risk.sizing import (
 from options_trader.risk.vol_regime import check_vol_regime, fetch_vix_closes
 from options_trader.signals.credit import build_position, leg_passes_live_liquidity
 from options_trader.signals.csp import build_csp
-from options_trader.signals.income import DEFAULT_PROFILE, PROFILES, get_profile
+from options_trader.signals.income import (
+    DEFAULT_PROFILE, PROFILES, TYPICAL_STRIKE_GRID, fit_wing_to_grid,
+    get_profile, infer_strike_grid,
+)
 from options_trader.signals.iv_rank import atm_iv, build_iv_history, read_iv_rank
 
 IV_HISTORY_PATH = "data_iv_history.json"
@@ -100,8 +103,15 @@ def main() -> int:
     ap.add_argument("--config", default="configs/income_framework.json")
     ap.add_argument("--profile", default=DEFAULT_PROFILE,
                     choices=sorted(PROFILES))
-    ap.add_argument("--provider", choices=["mcp", "yfinance"],
-                    default="yfinance")
+    ap.add_argument("--provider", choices=["mcp", "yfinance", "uw"],
+                    default="yfinance",
+                    help="uw = Unusual Whales live chains (real open "
+                         "interest AND chain-quoted deltas; needs UW_API_KEY)")
+    ap.add_argument("--underlying",
+                    help="Override the config's underlying. Anything other "
+                         "than an index is outside the validated universe — "
+                         "the wing geometry is refitted to that chain's "
+                         "strike grid and the report says so.")
     ap.add_argument("--journal", default="journal.db")
     ap.add_argument("--events", default="configs/events.json")
     ap.add_argument("--iv-history", default=IV_HISTORY_PATH)
@@ -148,11 +158,14 @@ def main() -> int:
     if args.provider == "mcp":
         from options_trader.data.mcp_provider import MCPDataProvider
         provider = MCPDataProvider()
+    elif args.provider == "uw":
+        from options_trader.data.unusual_whales import UWLiveProvider
+        provider = UWLiveProvider()
     else:
         from options_trader.data.provider import YFinanceProvider
         provider = YFinanceProvider()
 
-    underlying = cfg.underlyings[0]
+    underlying = args.underlying or cfg.underlyings[0]
     expirations = provider.get_expirations(underlying)
     # Scoped to the income book: the credit book is a different script's
     # responsibility and its open positions must not suppress an income
@@ -192,6 +205,29 @@ def main() -> int:
 
         snap = get_chain(expiration)
         liquid = snap.chain[snap.chain.apply(leg_passes_live_liquidity, axis=1)]
+
+        # Wings are configured as a fraction of spot; strike grids are
+        # absolute. On a low-priced underlying the configured wing can be
+        # narrower than one strike, in which case _pick_wing silently snaps
+        # to the adjacent strike and builds a structure nobody chose. Fit
+        # the wing to the grid the LIQUID rows actually offer -- the strikes
+        # this position can be built from, not the chain's nominal spacing
+        # -- and carry the change into the report rather than swallowing it.
+        grid = (infer_strike_grid(liquid, snap.spot)
+                or TYPICAL_STRIKE_GRID.get(underlying))
+        wing_notes: list[str] = []
+        if grid:
+            vcfg, wing_note = fit_wing_to_grid(vcfg, snap.spot, grid)
+            if wing_note:
+                print(f"{name}: {wing_note}")
+                wing_notes.append(wing_note)
+        else:
+            wing_notes.append(
+                f"strike grid could not be measured near spot {snap.spot:.2f} "
+                f"and {underlying} is not in TYPICAL_STRIKE_GRID — wing width "
+                f"is unverified")
+            print(f"{name}: {wing_notes[-1]}")
+
         pos = build_position(liquid, snap.spot, underlying, today.isoformat(),
                              expiration, snap.dte, vcfg,
                              cfg.slippage_half_spread_frac)
@@ -226,9 +262,20 @@ def main() -> int:
             profile.typical_event_move_pct)
         event_note = f"{ev.describe_span()} | {prem_note}"
 
-        # 8. sizing
+        # 8. sizing — inside the risk manager's capacity, not beside it.
+        # The tier schedule and the risk manager are separate authorities
+        # (see risk/sizing.py's docstring), and the broker clamps to the
+        # smaller. Asking the risk manager FIRST and sizing within its
+        # answer is what keeps the number in the report the operator
+        # confirms identical to the number that reaches the journal.
         risk_per = spread_capital_at_risk(max(pos.widths().values()), pos.credit)
+        rcheck = broker.risk.check(risk_per)
+        if not rcheck.allowed:
+            _journal_skip(journal, f"{name}: NO QUALIFYING TRADE — risk manager "
+                          f"refused: {'; '.join(rcheck.reasons)}", args.dry_run)
+            continue
         sizing = size_position(equity, risk_per, profile.tiers,
+                               max_contracts=rcheck.max_contracts,
                                open_capital_at_risk=open_capital,
                                portfolio_heat_cap_pct=profile.portfolio_heat_cap_pct)
         if not sizing.feasible:
@@ -238,8 +285,10 @@ def main() -> int:
 
         structure = ("iron_condor" if vcfg.short_call_delta and vcfg.short_put_delta
                      else "put_credit_spread")
-        notes = [] if ok_prem else ["premium does not cover the spanned-event "
-                                    "budget — consider reducing size"]
+        notes = list(wing_notes)
+        if not ok_prem:
+            notes.append("premium does not cover the spanned-event "
+                         "budget — consider reducing size")
         report = report_credit_position(pos, sizing, equity, structure,
                                         iv_rank_note=iv_note,
                                         event_note=event_note, notes=notes)
