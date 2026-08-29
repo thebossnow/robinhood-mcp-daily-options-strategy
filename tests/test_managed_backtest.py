@@ -103,6 +103,32 @@ class TestExitRules:
         assert t.exit_reason == "breach"
         assert t.exit_date == breach_week
 
+    def test_hard_stop_fires_before_breach_when_enabled(self):
+        # exit_on_breach off so hard_stop is isolated; spot never moves.
+        cfg = CreditVariantConfig(name="put_spread_hs", short_put_delta=0.30,
+                                  min_credit_frac=0.0, exit_on_breach=False,
+                                  hard_stop_credit_mult=1.5)
+        stop_week = checkpoints()[2]
+        factors = {d: 1.0 for d in trading_days()}
+        factors[stop_week] = 4.0   # cost to close balloons well past 2.5x credit
+        history = FakeHistory(factors)
+        result = run_one(history, spot_lookup(), cfg=cfg)
+        t = result.trades[0]
+        assert t.exit_reason == "hard_stop"
+        assert t.exit_date == stop_week
+        assert t.pnl < 0
+
+    def test_hard_stop_disabled_by_default(self):
+        # Same blowup, but hard_stop_credit_mult is None (default) — falls
+        # through to breach/time_exit instead of a dollar-loss stop.
+        stop_week = checkpoints()[2]
+        factors = {d: 1.0 for d in trading_days()}
+        factors[stop_week] = 4.0
+        history = FakeHistory(factors)
+        result = run_one(history, spot_lookup())
+        t = result.trades[0]
+        assert t.exit_reason != "hard_stop"
+
     def test_condor_breach_on_upside(self):
         history = FakeHistory({d: 1.0 for d in trading_days()})
         breach_week = checkpoints()[2]

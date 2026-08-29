@@ -275,6 +275,10 @@ class ManagedBacktestEngine:
         if exit_cost is not None and \
                 pos.credit - exit_cost >= cfg.profit_take_frac * pos.credit:
             reason = "profit_target"
+        if reason is None and cfg.hard_stop_credit_mult is not None and \
+                exit_cost is not None and \
+                exit_cost - pos.credit >= cfg.hard_stop_credit_mult * pos.credit:
+            reason = "hard_stop"
         if reason is None and cfg.exit_on_breach and spot:
             if (pos.short_put_strike is not None and spot < pos.short_put_strike) or \
                (pos.short_call_strike is not None and spot > pos.short_call_strike):

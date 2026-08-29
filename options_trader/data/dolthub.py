@@ -77,7 +77,14 @@ class DoltHubClient:
 
     def query(self, sql: str) -> list[dict]:
         for attempt in range(4):
-            resp = requests.get(self.url, params={"q": sql}, timeout=60)
+            try:
+                resp = requests.get(self.url, params={"q": sql}, timeout=60)
+            except requests.exceptions.RequestException as exc:
+                wait = 2.0 * (attempt + 1)
+                logger.info("DoltHub connection error (%s) — retrying in %.0fs",
+                            exc, wait)
+                time.sleep(wait)
+                continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 wait = 2.0 * (attempt + 1)
                 logger.info("DoltHub %s — retrying in %.0fs", resp.status_code, wait)

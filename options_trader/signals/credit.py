@@ -91,6 +91,12 @@ class CreditVariantConfig:
     # so a 25-DTE entry isn't force-closed days after opening.
     time_exit_dte: int = 21
     time_exit_frac: float = 0.5
+    # Close if the unrealized loss reaches this multiple of entry credit.
+    # None disables it. Distinct from exit_on_breach: breach is a proxy
+    # (spot crossed a short strike) the SPY sweep found net-negative and
+    # ships off; this is a direct dollar-loss stop, on by default nowhere
+    # in this repo until a caller opts in.
+    hard_stop_credit_mult: float | None = None
 
     def time_exit_threshold(self, dte_at_entry: int) -> int:
         return min(self.time_exit_dte, int(dte_at_entry * self.time_exit_frac))
