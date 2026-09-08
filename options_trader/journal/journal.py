@@ -170,6 +170,91 @@ class Journal:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    def record_csp_entry(self, candidate: dict, contracts: int,
+                         notes: str = "") -> int:
+        """Record a cash-secured put (signals/csp.py's CSPCandidate.to_dict()).
+        entry_debit stores the per-share PREMIUM received (after slippage);
+        record_exit shares the credit-side P&L formula with strategy='credit'."""
+        cur = self._conn.execute(
+            """INSERT INTO trades
+               (opened_at, underlying, expiration, kind, long_strike,
+                short_strike, width, contracts, entry_debit, max_loss,
+                max_profit, candidate_json, notes, strategy, legs_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                candidate["underlying"],
+                candidate["expiration"],
+                "csp",
+                0.0,
+                candidate["strike"],
+                candidate["strike"],
+                contracts,
+                candidate["premium"],
+                (candidate["strike"] - candidate["premium"]) * 100.0 * contracts,
+                candidate["premium"] * 100.0 * contracts,
+                json.dumps(candidate),
+                notes,
+                "csp",
+                json.dumps([{"type": "put", "strike": candidate["strike"], "side": -1}]),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def record_cc_entry(self, candidate: dict, contracts: int,
+                        notes: str = "") -> int:
+        """Record a covered call sold against assigned shares
+        (signals/covered_call.py's CoveredCallCandidate.to_dict())."""
+        cur = self._conn.execute(
+            """INSERT INTO trades
+               (opened_at, underlying, expiration, kind, long_strike,
+                short_strike, width, contracts, entry_debit, max_loss,
+                max_profit, candidate_json, notes, strategy, legs_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                candidate["underlying"],
+                candidate["expiration"],
+                "covered_call",
+                0.0,
+                candidate["strike"],
+                candidate["strike"],
+                contracts,
+                candidate["premium"],
+                0.0,   # shares already owned collateralize this; no separate max loss
+                candidate["premium"] * 100.0 * contracts,
+                json.dumps(candidate),
+                notes,
+                "covered_call",
+                json.dumps([{"type": "call", "strike": candidate["strike"], "side": -1}]),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def record_shares_entry(self, underlying: str, lots: int, cost_basis: float,
+                            notes: str = "") -> int:
+        """Record shares acquired via CSP assignment (100 * lots shares) at
+        `cost_basis` per share (strike minus premium collected). Purely
+        inventory bookkeeping — the P&L from the put's intrinsic loss and
+        any covered-call premium are recorded on those trades directly, so
+        this row's own realized_pnl on exit is informational only."""
+        cur = self._conn.execute(
+            """INSERT INTO trades
+               (opened_at, underlying, expiration, kind, long_strike,
+                short_strike, width, contracts, entry_debit, max_loss,
+                max_profit, notes, strategy)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                underlying, "", "long_shares", 0.0, cost_basis, 0.0,
+                lots, cost_basis, 0.0, 0.0, notes, "shares",
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
     def record_exit(self, trade_id: int, exit_value: float,
                     status: str = "closed", notes: str = "") -> TradeRecord:
         row = self._get_row(trade_id)
@@ -177,7 +262,7 @@ class Journal:
             raise KeyError(f"No trade with id {trade_id}")
         if row["status"] != "open":
             raise ValueError(f"Trade {trade_id} is already {row['status']}")
-        if row["strategy"] == "credit":
+        if row["strategy"] in ("credit", "csp", "covered_call"):
             # entry_debit holds the credit received; exit_value is the cost
             # paid to close (or intrinsic at settlement).
             pnl = (row["entry_debit"] - exit_value) * 100.0 * row["contracts"]
@@ -218,6 +303,35 @@ class Journal:
             "ORDER BY opened_at"
         ).fetchall()
         return [_to_record(r) for r in rows]
+
+    def open_csp_positions(self) -> list[TradeRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status='open' AND strategy='csp' "
+            "ORDER BY opened_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
+    def open_cc_positions(self) -> list[TradeRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status='open' AND strategy='covered_call' "
+            "ORDER BY opened_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
+    def open_shares_positions(self) -> list[TradeRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE status='open' AND strategy='shares' "
+            "ORDER BY opened_at"
+        ).fetchall()
+        return [_to_record(r) for r in rows]
+
+    def csp_collateral_by_underlying(self) -> dict[str, float]:
+        """Sum of strike*100*contracts for open CSPs, grouped by underlying."""
+        totals: dict[str, float] = {}
+        for r in self.open_csp_positions():
+            totals[r.underlying] = totals.get(r.underlying, 0.0) + \
+                r.short_strike * 100.0 * r.contracts
+        return totals
 
     def closed_trades(self) -> list[TradeRecord]:
         """All settled (closed or expired) trades, oldest first — the real-

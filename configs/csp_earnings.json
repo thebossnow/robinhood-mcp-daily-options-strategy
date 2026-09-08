@@ -1,0 +1,8 @@
+{
+  "_comment": "No earnings-calendar data source is connected to this pipeline. Maintain this file by hand: ticker -> list of ISO next-earnings dates. risk/csp_manager.py blocks NEW entries within earnings_blackout_days_before/after (see configs/csp_paper.json) of any listed date for tickers in earnings_sensitive. An empty or stale entry means the blackout silently does nothing for that ticker -- update this before each earnings season.",
+  "HOOD": [],
+  "PLTR": [],
+  "TSLA": [],
+  "NVDA": [],
+  "MU": []
+}

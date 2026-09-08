@@ -89,3 +89,105 @@ class StrategyConfig:
     @property
     def daily_loss_limit(self) -> float:
         return self.account_equity * self.daily_loss_limit_pct
+
+
+@dataclass
+class CSPConfig:
+    """Cash-secured-put income strategy — single-leg only, no naked, no
+    spreads. Every knob the user's rules named lives here so scan_csp.py,
+    manage_csp.py, and risk/csp_manager.py all read the same numbers.
+
+    This is a DIFFERENT strategy from StrategyConfig's vertical/credit
+    spreads above: it collateralizes the full strike (cash-secured), not a
+    defined-risk width, so its sizing is collateral-as-%-of-account rather
+    than max-loss-as-%-of-account.
+    """
+
+    # --- Universe, priority order (first tried first each scan) ---
+    universe: list[str] = field(default_factory=lambda: [
+        "QQQ", "HOOD", "PLTR", "TSLA", "TSLL", "NVDA", "MU", "SOXL",
+    ])
+    # QQQ (or any name listed here) is exempt from the one-underlying-at-a-
+    # time rule: multiple staggered strikes/expirations can be open at once.
+    ladder_underlyings: list[str] = field(default_factory=lambda: ["QQQ"])
+    max_ladder_positions: int = 4
+    # A laddered rung's strike must be at least this far OTM (first ITM
+    # strike >= 10-15% below spot, per the user's rule).
+    ladder_min_otm_pct: float = 0.10
+
+    # --- Delta window ---
+    delta_min: float = 0.05
+    delta_max: float = 0.15
+    delta_target: float = 0.10       # preferred strike: closest to this
+    # High-vol names get pushed toward the low end of the window.
+    high_vol_underlyings: list[str] = field(default_factory=lambda: ["SOXL", "TSLL"])
+    high_vol_delta_max: float = 0.10
+    high_vol_delta_target: float = 0.07
+
+    # --- DTE window ---
+    min_dte: int = 21
+    max_dte: int = 45
+    target_dte: int = 30
+    # Occasional longer-dated entries (60-180+ DTE) only when standard-
+    # window premium/ROC is weak and there's spare collateral; never picked
+    # automatically — scan_csp.py only considers this window with --long-dte.
+    long_dte_min: int = 60
+    long_dte_max: int = 180
+
+    # --- Liquidity + premium floor ---
+    min_open_interest: int = 500
+    min_volume: int = 100
+    max_spread_pct: float = 0.10
+    min_premium: float = 0.15        # skip penny options after commissions
+    require_nonzero_bid: bool = True
+
+    # --- Position sizing (collateral, not max-loss) ---
+    # Hard cap: never commit more than this fraction of net liq to one
+    # underlying's put collateral. 0.20 is the ceiling from the rules;
+    # target_pct_per_underlying is used to prefer smaller size when ranking.
+    max_pct_per_underlying: float = 0.20
+    target_pct_per_underlying: float = 0.15
+    # Hard stop: refuse new entries if the cash+T-bill buffer would fall
+    # below this fraction of net liq. target is what SGOV sweeps aim for.
+    min_cash_buffer_pct: float = 0.30
+    target_cash_buffer_pct: float = 0.40
+
+    # --- Exit / management ---
+    # Close when captured profit (premium collected minus current cost to
+    # buy back) reaches this fraction of the premium collected — i.e. of
+    # max profit, since a short put's max profit is the premium itself.
+    # The user's rule allows anywhere in 50-90%; this is the trigger point.
+    profit_take_frac: float = 0.50
+    delta_alert: float = 0.30         # notify + propose roll/BTC/assignment
+    urgent_dte: int = 5               # inside this DTE, a delta alert is urgent
+
+    # --- Risk hard stops ---
+    max_consecutive_losses: int = 3   # kill switch, requires human review
+    # Earnings-week blackout: tickers here are single names where an
+    # upcoming print blocks new entries unless explicitly approved. No
+    # earnings-calendar data source is connected in this pipeline today —
+    # populate configs/csp_earnings.json (ticker -> ISO earnings dates)
+    # manually, or wire a real calendar provider before relying on this.
+    earnings_sensitive: list[str] = field(default_factory=lambda: [
+        "HOOD", "PLTR", "TSLA", "NVDA", "MU",
+    ])
+    earnings_blackout_days_before: int = 2
+    earnings_blackout_days_after: int = 1
+
+    # --- Account (paper phase: notional, not a claim about real money) ---
+    account_equity: float = 25000.0
+    slippage_half_spread_frac: float = 0.5
+
+    def to_json(self, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(asdict(self), indent=2))
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "CSPConfig":
+        data = json.loads(Path(path).read_text())
+        return cls(**data)
+
+    def delta_window(self, underlying: str) -> tuple[float, float, float]:
+        """(delta_min, delta_max, delta_target) for this underlying."""
+        if underlying in self.high_vol_underlyings:
+            return self.delta_min, self.high_vol_delta_max, self.high_vol_delta_target
+        return self.delta_min, self.delta_max, self.delta_target

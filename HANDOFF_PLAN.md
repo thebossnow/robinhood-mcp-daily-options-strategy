@@ -199,8 +199,19 @@ The project follows a gated, data-first approach before any real money exposure.
 - **Strategy Core:** `options_trader/config.py` (DTE, liquidity, premium, em_filter_multiplier, risk limits), `options_trader/signals/` (candidates.py with EM, math.py ported, probability.py).
 - **Risk/Execution:** `options_trader/risk/manager.py`, `options_trader/execution/paper.py`, `options_trader/journal/journal.py` (no-trade support).
 - **MCP:** `options_trader/data/mcp_provider.py` (hardened pagination + validation).
+- **CSP Income Strategy (paper only, added 2026-09):** `scripts/scan_csp.py`,
+  `scripts/manage_csp.py`, `options_trader/signals/csp.py`,
+  `options_trader/signals/covered_call.py`,
+  `options_trader/risk/csp_manager.py`,
+  `options_trader/execution/paper_csp.py`, `configs/csp_paper.json`,
+  `configs/csp_earnings.json` (hand-maintained), `CSP_AGENT_PROMPT.md`.
+  Cash-secured puts only, sized as collateral-%-of-net-liq rather than
+  max-loss-%-of-equity — a separate risk manager from `risk/manager.py`
+  because of that. No live trading, account-data, or earnings-calendar
+  tool is connected; not wired into `crontab.txt` for the same reason
+  (net-liq/cash-available have no automated source here).
 - **Tests:** `tests/` (run with pytest).
-- **Docs:** `README.md`, `AGENT_PROMPT.md`, `PHASE2_VALIDATION.md`, `HANDOFF_PLAN.md` (this file).
+- **Docs:** `README.md`, `AGENT_PROMPT.md`, `CSP_AGENT_PROMPT.md`, `PHASE2_VALIDATION.md`, `HANDOFF_PLAN.md` (this file).
 
 **Patterns to Reuse:**
 - Always use `if args.data_only: return 0` for quiet mode.

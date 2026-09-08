@@ -437,6 +437,39 @@ trades/config/6-months actually can: realized slippage vs the 0.5×
 half-spread assumption, daily-vs-weekly management uplift, and
 no-disaster confirmation — not statistical proof of a +$6/trade edge.
 
+## Cash-secured put income (single-name premium selling)
+
+`scripts/scan_csp.py` and `scripts/manage_csp.py` run a third strategy,
+separate from the debit-spread and put-credit-spread pipelines above:
+**cash-secured puts only** (no naked, no defined-risk spread) on a small
+liquid universe — QQQ first, then HOOD, PLTR, TSLA, TSLL, NVDA, MU, SOXL —
+sized as collateral-as-%-of-account rather than max-loss-as-%-of-account,
+since a cash-secured put's worst case is the full strike.
+
+Rules (from `configs/csp_paper.json`, enforced in
+`options_trader/risk/csp_manager.py`): 0.05–0.15 delta (0.05–0.10 on
+SOXL/TSLL), 21–45 DTE, never more than 20% of net liq collateralizing one
+underlying, never let the cash+SGOV buffer fall below 30% of net liq, one
+underlying at a time for new risk except QQQ, which may ladder up to 4
+staggered strikes/expirations. Close at 50%+ of premium captured; a delta
+≥ 0.30 or an ITM put raises an alert (roll / buy-to-close / accept
+assignment) rather than acting automatically. Assignment opens a shares
+position; the following session proposes a covered call at 0.05–0.15
+delta, strike at or above cost basis when one qualifies.
+
+**No live Robinhood trading tool, account-data tool, or earnings-calendar
+source is connected to this pipeline.** These scripts only ever produce
+paper fills; a human places any real order, supplies the account's actual
+net-liq/cash-available on the command line each run, and maintains
+`configs/csp_earnings.json` by hand. See `CSP_AGENT_PROMPT.md` for the
+full operator contract, including the same 40+-closed-paper-trades gate
+the other strategies require before live money.
+
+```bash
+python scripts/scan_csp.py --net-liq 25000 --cash-available 18000 --provider mcp
+python scripts/manage_csp.py --net-liq 25000 --cash-available 18000 --provider mcp
+```
+
 ## Calibration study: do the model's numbers predict reality?
 
 Every candidate carries model outputs — `p_win`/`p_loss` from N(d2) at
