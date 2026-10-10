@@ -2,10 +2,16 @@
   "_README": [
     "Real dates, fetched 2026-10-10 from the primary sources.",
     "CPI: bls.gov/schedule/news_release/cpi.htm (last listed: Dec 10, 2027).",
+    "Oct 14, 2026 CPI from bls.gov/schedule/2026/10_sched.htm.",
     "FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm (page updated Oct 7, 2026); date = statement day (2nd day). 2027 meetings are tentative per the Fed.",
     "Refresh when BLS/Fed publish further dates."
   ],
   "events": [
+    {
+      "date": "2026-10-14",
+      "kind": "CPI",
+      "note": "Sep 2026 CPI, 08:30 ET — bls.gov/schedule/2026/10_sched.htm (not shown on the cpi.htm list as of 2026-10-10)"
+    },
     {
       "date": "2026-10-28",
       "kind": "FOMC",
