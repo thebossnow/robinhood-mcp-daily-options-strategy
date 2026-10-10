@@ -476,8 +476,8 @@ Both readings ship, in `options_trader/signals/income.py`:
 
 | profile | what it is |
 |---|---|
-| `as_specified` | The framework verbatim. Runnable, so its refusals are observable rather than argued about. |
-| `evidence_adjusted` | **Default.** The same framework with every parameter this repo has measured replaced by the measured answer, and nothing else changed. |
+| `as_specified` | **Default** (operator decision 2026-10-10; review at 30/60/90 days). The framework verbatim. Runnable, so its refusals are observable rather than argued about. |
+| `evidence_adjusted` | Selectable alternative (`--profile evidence_adjusted` / `INCOME_PROFILE`). The same framework with every parameter this repo has measured replaced by the measured answer, and nothing else changed. |
 
 ### What changed, and why
 
@@ -541,7 +541,7 @@ the structure to be worth opening at all — and a wider wing is a bigger max
 loss.
 
 So `configs/income_framework.json` runs a NOTIONAL $75,000 account, chosen
-so the default profile can actually carry its own primary variant. Like
+so the evidence_adjusted profile can actually carry its own primary variant. Like
 `configs/credit_paper.json`'s $50k, this is a paper-phase figure, not a
 recommendation: the paper phase measures fill quality and management
 uplift, and capitalization is a separate decision. Run
