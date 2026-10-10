@@ -113,4 +113,4 @@ def load_income_config(path) -> StrategyConfig:
         raise ValueError(f"{path}: take_profit_pct is required for the income "
                          "framework (expected 0.2); refusing to fall back to "
                          "StrategyConfig's 0.75 default")
-    return StrategyConfig(**raw)
+    return StrategyConfig.from_json(path)

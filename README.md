@@ -484,6 +484,9 @@ Both readings ship, in `options_trader/signals/income.py`:
 | framework rule | disposition | grounded in |
 |---|---|---|
 | close at 50% of credit | **→ 20%** (operator decision 2026-10-10) | `profit_take_frac = 0.20` on every income variant |
+| (new) never hold to expiration | **added** (operator decision 2026-10-10) | time exit at min(21 DTE, half entry DTE), floored at 1 DTE; an unpriceable exit-due position is flagged CLOSE MANUALLY |
+| (new) loss stop | **added: 5% of account equity** (operator decision 2026-10-10) | `stop_loss_mode: account_equity`, `max_loss_pct_account: 0.05` ($3,750 at $75k); alternate `position_max_loss` at 0.5 of max loss is configurable but not the default |
+| (new) iron butterfly | **added, OFF by default** | `enable_iron_butterfly: false`; see "Iron butterfly" below |
 | 30–45 DTE monthlies | kept | both profiles target 40 DTE |
 | enter Monday/Tuesday | kept | `IncomeProfile.entry_weekdays` |
 | confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. The delta is labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails. yfinance and the MCP provider publish no delta column, so live entries there are model-derived; `--provider uw` quotes a real delta per contract and reports `chain-quoted` |
