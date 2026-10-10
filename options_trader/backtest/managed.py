@@ -46,6 +46,7 @@ import pandas as pd
 from ..signals.credit import (
     CreditPosition, CreditVariantConfig, bs_price, build_position,
 )
+from ..risk.exit_policy import stop_hit
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,22 @@ class ManagedBacktestEngine:
     MAX_DTE_FETCH = 50   # covers entry window (<=45 DTE) and every held exp
 
     def __init__(self, history, spot_lookup: dict,
-                 slippage_half_spread_frac: float = 0.5):
+                 slippage_half_spread_frac: float = 0.5,
+                 exit_policy=None, contracts_for=None,
+                 daily_model_checks: bool = False):
+        """exit_policy: a StrategyConfig-like object read by
+        risk/exit_policy.stop_hit (None = no loss stop). contracts_for(pos)
+        gives the contract count the dollar stop is measured on (default 1;
+        P&L in the summary stays per contract). daily_model_checks: also
+        evaluate exits on every trading day between weekly checkpoints,
+        marking all legs with the model (entry IV, that day's spot), since
+        the data source is fetched weekly."""
         self.history = history
         self.spots = spot_lookup
         self.slip_frac = slippage_half_spread_frac
+        self.exit_policy = exit_policy
+        self.contracts_for = contracts_for
+        self.daily_model_checks = daily_model_checks
 
     def run(self, symbols: list[str], start: str, end: str,
             variants: list[CreditVariantConfig],
@@ -192,6 +205,23 @@ class ManagedBacktestEngine:
             if day in entry_grid and spot and not chains.empty:
                 book.extend(self._enter(symbol, day, spot, chains,
                                         variants, result))
+            # 3) optional daily, model-marked exit checks until the next
+            # checkpoint (no chain fetch: legs are priced at entry IV).
+            if self.daily_model_checks and book:
+                nxt = checkpoints[i + 1] if i + 1 < len(checkpoints) else None
+                for d in all_days:
+                    if d <= day or (nxt is not None and d >= nxt):
+                        continue
+                    dspot = self.spots.get((symbol, d))
+                    still_open = []
+                    for pos, cfg in book:
+                        trade = self._check_exit(pos, cfg, d, dspot,
+                                                 pd.DataFrame(), all_days)
+                        if trade is not None:
+                            result.trades.append(trade)
+                        else:
+                            still_open.append((pos, cfg))
+                    book = still_open
             if progress and (i + 1) % 25 == 0:
                 logger.info("%s: %d/%d checkpoints, %d trades closed",
                             symbol, i + 1, len(checkpoints), len(result.trades))
@@ -285,9 +315,12 @@ class ManagedBacktestEngine:
                 pos.credit - exit_cost >= cfg.profit_take_frac * pos.credit:
             reason = "profit_target"
         if reason is None and exit_cost is not None and \
-                cfg.stop_loss_frac is not None and \
-                exit_cost - pos.credit >= cfg.stop_loss_frac * pos.credit:
-            reason = "stop_loss"
+                self.exit_policy is not None:
+            n = self.contracts_for(pos) if self.contracts_for else 1
+            fired, _, _ = stop_hit(self.exit_policy, exit_cost - pos.credit,
+                                   n, pos.max_loss * 100.0 * n)
+            if fired:
+                reason = "stop_loss"
         if reason is None and cfg.exit_on_breach and spot:
             if (pos.short_put_strike is not None and spot < pos.short_put_strike) or \
                (pos.short_call_strike is not None and spot > pos.short_call_strike):

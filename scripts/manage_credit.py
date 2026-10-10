@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from options_trader.risk.exit_policy import stop_hit
 from options_trader.config import StrategyConfig
 from options_trader.execution.paper import PaperBroker
 from options_trader.journal import Journal
@@ -90,6 +91,9 @@ def manage_position(rec, cfg: StrategyConfig, journal: Journal,
     snap = provider.get_chain(rec.underlying, rec.expiration)
     marks = mark_position(legs, snap.chain)
     if marks is None:
+        if dte <= vcfg.time_exit_threshold(dte_at_entry):
+            return (f"{tag}: TIME EXIT DUE but unmarkable today (missing/"
+                    f"crossed leg quote) — CLOSE MANUALLY; never hold to expiry")
         return f"{tag}: unmarkable today (missing/crossed leg quote) — no action"
     cost_mid, half_sum = marks
     exit_cost_est = cost_mid + cfg.slippage_half_spread_frac * half_sum
@@ -101,12 +105,14 @@ def manage_position(rec, cfg: StrategyConfig, journal: Journal,
                                      notes="profit target (daily check)")
         return (f"{tag}: PROFIT TARGET — captured {captured:.2f} of "
                 f"{rec.entry_debit:.2f}, pnl {closed.realized_pnl:+.2f}")
-    stop = getattr(vcfg, "stop_loss_frac", None)
-    if stop is not None and -captured >= stop * rec.entry_debit:
+    fired, thr, loss_usd = stop_hit(cfg, -captured, rec.contracts,
+                                    rec.max_loss)
+    if fired:
         closed = broker.close_credit(rec.id, cost_mid, half_sum,
-                                     notes="stop loss (daily check)")
-        return (f"{tag}: STOP LOSS — loss {-captured:.2f} >= {stop:g}x "
-                f"credit {rec.entry_debit:.2f}, pnl {closed.realized_pnl:+.2f}")
+                                     notes=f"stop loss ({cfg.stop_loss_mode})")
+        return (f"{tag}: STOP LOSS — unrealized loss ${loss_usd:,.2f} >= "
+                f"${thr:,.2f} ({cfg.stop_loss_mode}), "
+                f"pnl {closed.realized_pnl:+.2f}")
     if dte <= vcfg.time_exit_threshold(dte_at_entry):
         closed = broker.close_credit(rec.id, cost_mid, half_sum,
                                      notes=f"time exit at {dte} DTE")

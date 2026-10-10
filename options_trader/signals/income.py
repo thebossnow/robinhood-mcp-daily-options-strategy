@@ -120,7 +120,7 @@ _AS_SPEC_VARIANTS = {
         # A put credit spread has no "one third of the width" instruction in
         # the framework -- that clause names iron condors only -- so this
         # keeps the repo's measured-achievable floor.
-        min_credit_frac=0.15, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.15, exit_on_breach=False, profit_take_frac=0.20,
     ),
     # The framework says "collect about one-third of the spread width";
     # the operator lowered this floor to 20% of width (decision 2026-10-10)
@@ -128,13 +128,13 @@ _AS_SPEC_VARIANTS = {
     "spec_condor_20d": CreditVariantConfig(
         name="spec_condor_20d", short_put_delta=0.20, short_call_delta=0.20,
         wing_width_frac=0.02, min_dte=30, max_dte=45, target_dte=38,
-        min_credit_frac=0.20, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.20, exit_on_breach=False, profit_take_frac=0.20,
     ),
     # "Sell weeklies on Monday or Tuesday of the expiration week."
     "spec_weekly_put_25d": CreditVariantConfig(
         name="spec_weekly_put_25d", short_put_delta=0.25, short_call_delta=None,
         wing_width_frac=0.02, min_dte=1, max_dte=5, target_dte=4,
-        min_credit_frac=0.10, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.10, exit_on_breach=False, profit_take_frac=0.20,
         time_exit_dte=1, time_exit_frac=0.5,
     ),
 }
@@ -144,7 +144,7 @@ AS_SPECIFIED = IncomeProfile(
     description="The income framework implemented verbatim, for comparison.",
     variants=_AS_SPEC_VARIANTS,
     csp=CSPConfig(name="spec_csp_25d", short_put_delta=0.25, min_dte=30,
-                  max_dte=45, target_dte=38, profit_take_frac=0.50),
+                  max_dte=45, target_dte=38, profit_take_frac=0.20),
     min_iv_rank=0.30,          # "ideally above 30"
     # The framework says IV RANK, so this profile gates on IV rank. The
     # dataclass default is percentile, which is the better statistic and the
@@ -180,20 +180,20 @@ _ADJUSTED_VARIANTS = {
     "income_condor15": CreditVariantConfig(
         name="income_condor15", short_put_delta=0.15, short_call_delta=0.15,
         wing_width_frac=0.04, min_dte=30, max_dte=45, target_dte=40,
-        min_credit_frac=0.06, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.06, exit_on_breach=False, profit_take_frac=0.20,
     ),
     # 10-delta put spread, 2% wing: the other sweep survivor.
     "income_put10": CreditVariantConfig(
         name="income_put10", short_put_delta=0.10, short_call_delta=None,
         wing_width_frac=0.02, min_dte=30, max_dte=45, target_dte=40,
-        min_credit_frac=0.03, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.03, exit_on_breach=False, profit_take_frac=0.20,
     ),
     # The weekly, moved off the 4-DTE gamma cliff into the 5-14 DTE band
     # the repo already paper-trades, entered Monday/Tuesday as specified.
     "income_weekly_put10": CreditVariantConfig(
         name="income_weekly_put10", short_put_delta=0.10, short_call_delta=None,
         wing_width_frac=0.02, min_dte=5, max_dte=14, target_dte=7,
-        min_credit_frac=0.02, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.02, exit_on_breach=False, profit_take_frac=0.20,
         time_exit_dte=4, time_exit_frac=0.5,
     ),
 }
@@ -208,7 +208,7 @@ EVIDENCE_ADJUSTED = IncomeProfile(
     # account the tier schedule was written for. Enable explicitly, with a
     # cheaper underlying, once sizing.min_equity_for_one_contract clears.
     csp=CSPConfig(name="income_csp_15d", short_put_delta=0.15, min_dte=30,
-                  max_dte=45, target_dte=40, profit_take_frac=0.50),
+                  max_dte=45, target_dte=40, profit_take_frac=0.20),
     allow_cash_secured_puts=False,
     min_iv_rank=None,          # recorded on every entry, never gating
     # Moot while min_iv_rank is None, but stated rather than defaulted: if

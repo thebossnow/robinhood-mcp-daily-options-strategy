@@ -185,10 +185,8 @@ credit floor 30% of width. It is an IRON butterfly (a credit structure)
 rather than a long call/put butterfly (a debit structure) so it reuses the
 credit book unchanged: `CreditPosition`, the paper broker and journal, the
 10/7/5% sizing tiers via `spread_capital_at_risk`, the event entry
-blackout, and the managed backtest. Exits: 50% profit target, time exit at
-min(21 DTE, half the entry DTE), and a loss stop at 1x the entry credit
-(`stop_loss_frac`; no other variant sets one). No breach stop — the shorts
-are ATM.
+blackout, and the managed backtest. Exits follow the income exit policy below.
+No breach stop — the shorts are ATM.
 
 It runs only when `configs/income_framework.json` sets
 `"enable_iron_butterfly": true`, or for one run with
@@ -196,3 +194,27 @@ It runs only when `configs/income_framework.json` sets
 that config, so it stays OFF in cron until the flag is flipped; if flipped,
 it enters through the same book (heat cap, risk manager, journal) as the
 condors and is managed by `manage_income.py` at 12:50 PT.
+
+## Income exit policy (operator decision 2026-10-10)
+
+Applies to every income-framework credit position (both profiles, CSPs and
+the iron butterfly); the credit book (`configs/credit_paper.json`) is
+unchanged.
+
+1. **Take profit at 20% of the credit** (`profit_take_frac = 0.20`).
+2. **Never hold to expiration.** Time exit at min(21 DTE, half the entry
+   DTE), floored at 1 DTE so even a 1-DTE weekly entry is closed rather than
+   settled. If the position can't be priced on an exit-due day,
+   `manage_income.py` logs `TIME EXIT DUE … CLOSE MANUALLY`.
+3. **Loss stop** (`risk/exit_policy.py`), set in
+   `configs/income_framework.json`:
+   - `"stop_loss_mode": "account_equity"` (default): close when the
+     unrealized loss (cost to close incl. slippage − credit, × 100 ×
+     contracts) reaches `max_loss_pct_account` × `account_equity`
+     (0.05 × $75,000 = $3,750).
+   - `"stop_loss_mode": "position_max_loss"`: close at
+     `max_loss_pct_position` × the position's max loss.
+   - omit / `null`: no loss stop.
+
+Note: the 10/7/5% tiers already cap a position's max loss near that 5%,
+so at $75k the account-equity stop can only fire close to max loss.

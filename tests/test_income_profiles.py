@@ -78,10 +78,13 @@ class TestAsSpecifiedIsVerbatim:
                 v.min_dte, v.max_dte, v.target_dte) == \
             (0.20, 0.20, 0.02, 30, 45, 38)
 
-    def test_every_variant_takes_profit_at_fifty_percent(self):
+    def test_every_variant_takes_profit_at_twenty_percent(self):
+        # Income-framework exit policy, operator decision 2026-10-10.
         for p in PROFILES.values():
             for v in p.variants.values():
-                assert v.profit_take_frac == 0.50, v.name
+                assert v.profit_take_frac == 0.20, v.name
+            if p.csp is not None:
+                assert p.csp.profit_take_frac == 0.20, p.name
 
     def test_iv_rank_preference_is_thirty_percent(self):
         assert AS_SPECIFIED.min_iv_rank == 0.30

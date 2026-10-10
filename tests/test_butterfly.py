@@ -66,10 +66,10 @@ class TestStructure:
 class TestFrameworkRules:
     def test_window_and_exits(self):
         assert (IRON_FLY.min_dte, IRON_FLY.max_dte) == (30, 45)
-        assert IRON_FLY.profit_take_frac == 0.50
+        assert IRON_FLY.profit_take_frac == 0.20
         assert IRON_FLY.time_exit_threshold(40) == 20
         assert IRON_FLY.time_exit_threshold(44) == 21
-        assert IRON_FLY.stop_loss_frac == 1.0
+        assert not hasattr(IRON_FLY, "stop_loss_frac")
         assert not IRON_FLY.exit_on_breach
 
     def test_off_by_default(self):
@@ -89,28 +89,3 @@ class TestFrameworkRules:
             BUTTERFLY_VARIANTS["spy_iron_fly"]
 
 
-class TestStopLoss:
-    class _Losing:
-        def get_chain(self, underlying, expiration):
-            c = _chain()
-            c.loc[0, ["bid", "ask"]] = [9.4, 9.5]
-            return type("Snap", (), {"chain": c})()
-
-    DAY = date(2026, 9, 1)
-
-    def test_stop_fires_when_loss_reaches_credit(self, tmp_path):
-        from scripts.manage_credit import manage_position
-        j, rec = _open(tmp_path, _condor())
-        vcfg = replace(IRON_FLY, name=rec.kind)
-        msg = manage_position(rec, _cfg(), j, PaperBroker(_cfg(), j),
-                              self._Losing(), None, self.DAY, vcfg=vcfg)
-        assert "STOP LOSS" in msg
-        assert j.get(rec.id).status == "closed"
-
-    def test_no_stop_configured_holds(self, tmp_path):
-        from scripts.manage_credit import manage_position
-        j, rec = _open(tmp_path, _condor())
-        vcfg = replace(IRON_FLY, name=rec.kind, stop_loss_frac=None)
-        msg = manage_position(rec, _cfg(), j, PaperBroker(_cfg(), j),
-                              self._Losing(), None, self.DAY, vcfg=vcfg)
-        assert "hold" in msg

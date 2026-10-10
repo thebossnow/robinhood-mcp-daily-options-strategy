@@ -20,7 +20,7 @@ impossible for the accounts it names.
 
 | # | Framework rule | Status | What the change is grounded in |
 |---|---|---|---|
-| 1 | Close winners at 50% of credit | **Kept as-is** | Already `profit_take_frac = 0.50` throughout |
+| 1 | Close winners at 50% of credit | **Changed to 20%** (operator decision 2026-10-10) | `profit_take_frac = 0.20` on every income variant and CSP; see "Exit policy" in README |
 | 2 | 30–45 DTE for monthlies | **Kept as-is** | Both profiles target 40 DTE |
 | 3 | Sell Monday or Tuesday | **Kept as-is** | `IncomeProfile.entry_weekdays` |
 | 4 | Confirm IV and delta before selling | **Kept, and enforced** | The scanner refuses an unconfirmed candidate rather than printing a warning above an opened position. Neither production provider publishes a delta column, so the delta is normally computed from the leg's live IV — the report labels it `model-derived` vs `chain-quoted`. What fails is a leg with no delta *and* no IV: nothing established what was being sold |

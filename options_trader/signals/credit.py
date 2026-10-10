@@ -91,15 +91,15 @@ class CreditVariantConfig:
     # so a 25-DTE entry isn't force-closed days after opening.
     time_exit_dte: int = 21
     time_exit_frac: float = 0.5
-    # Loss stop: close when the mark-to-close loss reaches this multiple of
-    # the entry credit. None = no loss stop (every pre-existing variant).
-    stop_loss_frac: float | None = None
     # "vertical" = put/call verticals and condors chosen by delta;
     # "iron_butterfly" = short ATM straddle with wings (signals/butterfly.py).
     structure: str = "vertical"
 
     def time_exit_threshold(self, dte_at_entry: int) -> int:
-        return min(self.time_exit_dte, int(dte_at_entry * self.time_exit_frac))
+        # Floor of 1 DTE: never hold to expiration (operator decision
+        # 2026-10-10). Without it a 1-DTE entry computes 0 and settles.
+        return max(1, min(self.time_exit_dte,
+                          int(dte_at_entry * self.time_exit_frac)))
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -76,6 +76,14 @@ class StrategyConfig:
     # income scan never builds one, including from cron.
     enable_iron_butterfly: bool = False
 
+    # --- Loss stop (risk/exit_policy.py) ---
+    # None = no loss stop (credit book). The income framework sets
+    # "account_equity" (loss >= max_loss_pct_account x equity) or
+    # "position_max_loss" (loss >= max_loss_pct_position x position max loss).
+    stop_loss_mode: str | None = None
+    max_loss_pct_account: float = 0.05
+    max_loss_pct_position: float = 0.05
+
     # --- Output ---
     top_n: int = 5
 

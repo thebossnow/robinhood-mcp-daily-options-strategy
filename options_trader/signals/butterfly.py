@@ -17,9 +17,9 @@ credit-book plumbing would apply. Same payoff family, wrong book.
 Shape: short straddle at the strike nearest spot, wings at
 `wing_width_frac * spot` on each side (snapped to listed strikes). The
 credit is large relative to width (often 40-60%), but so is the chance of
-giving it back: the profit zone is narrow. That is why this structure gets
-a loss stop (`stop_loss_frac`) that no other variant uses -- and why it is
-OFF by default (`enable_iron_butterfly` in configs/income_framework.json,
+giving it back: the profit zone is narrow. Exits follow the income
+framework's policy (20% profit target, time exit, account-equity loss
+stop in risk/exit_policy.py). It is OFF by default (`enable_iron_butterfly` in configs/income_framework.json,
 or `scan_income.py --butterfly` for a single run).
 """
 
@@ -41,11 +41,10 @@ IRON_FLY = CreditVariantConfig(
     # Rejects broken quotes, not normal entries: a 30-45 DTE SPY fly with
     # 3% wings normally collects far more than 30% of width.
     min_credit_frac=0.30,
-    profit_take_frac=0.50,
+    profit_take_frac=0.20,   # income-framework exit policy, 2026-10-10
     time_exit_dte=21, time_exit_frac=0.5,
-    # Close if the loss to close reaches 1x the credit received. A judgment
-    # default, not a measured one — flagged for the operator.
-    stop_loss_frac=1.0,
+    # Loss stop is the framework-wide one in risk/exit_policy.py
+    # (default: 5% of account equity), configured in income_framework.json.
     exit_on_breach=False,   # the shorts are ATM; a "breach" stop would fire
                             # on the first tick and is meaningless here
 )
