@@ -13,9 +13,9 @@
   "vix_entry_ceiling": 30.0,
   "vix_spike_pct": 0.3,
   "vix_spike_lookback_days": 5,
-  "take_profit_pct": 0.5,
+  "take_profit_pct": 0.2,
   "enable_iron_butterfly": false,
   "stop_loss_mode": "account_equity",
   "max_loss_pct_account": 0.05,
-  "max_loss_pct_position": 0.05
+  "max_loss_pct_position": 0.5
 }

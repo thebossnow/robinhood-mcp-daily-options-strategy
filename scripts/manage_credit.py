@@ -113,6 +113,12 @@ def manage_position(rec, cfg: StrategyConfig, journal: Journal,
         return (f"{tag}: STOP LOSS — unrealized loss ${loss_usd:,.2f} >= "
                 f"${thr:,.2f} ({cfg.stop_loss_mode}), "
                 f"pnl {closed.realized_pnl:+.2f}")
+    frac = getattr(vcfg, "stop_loss_frac", None)
+    if thr is None and frac is not None and -captured >= frac * rec.entry_debit:
+        closed = broker.close_credit(rec.id, cost_mid, half_sum,
+                                     notes="stop loss (variant stop_loss_frac)")
+        return (f"{tag}: STOP LOSS — loss {-captured:.2f} >= {frac:g}x credit "
+                f"{rec.entry_debit:.2f}, pnl {closed.realized_pnl:+.2f}")
     if dte <= vcfg.time_exit_threshold(dte_at_entry):
         closed = broker.close_credit(rec.id, cost_mid, half_sum,
                                      notes=f"time exit at {dte} DTE")

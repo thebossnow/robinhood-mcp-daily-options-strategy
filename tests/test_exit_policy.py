@@ -19,6 +19,7 @@ class TestThreshold:
         assert stop_threshold(cfg, 999.0) == pytest.approx(3750.0)
 
     def test_position_mode(self):
+        assert StrategyConfig().max_loss_pct_position == 0.50
         cfg = _cfg(stop_loss_mode="position_max_loss", max_loss_pct_position=0.05)
         assert stop_threshold(cfg, 2000.0) == pytest.approx(100.0)
 
@@ -74,7 +75,8 @@ class TestManagement:
         assert "hold" in msg and st == "open"
 
     def test_position_mode_fires(self, tmp_path):
-        msg, st = self._run(tmp_path, _cfg(stop_loss_mode="position_max_loss"))
+        msg, st = self._run(tmp_path, _cfg(stop_loss_mode="position_max_loss",
+                                           max_loss_pct_position=0.2))
         assert "STOP LOSS" in msg and st == "closed"
 
     def test_no_mode_no_stop(self, tmp_path):
@@ -93,3 +95,31 @@ class TestBacktestNeverHoldsOnPolicy:
         vs = [v for p in PROFILES.values() for v in p.variants.values()]
         for v in vs + [IRON_FLY]:
             assert v.time_exit_threshold(v.min_dte) >= 1, v.name
+
+
+class TestSingleProfitTarget:
+    def test_config_and_variants_agree_at_20pct(self):
+        from options_trader.signals.income import PROFILES
+        cfg = StrategyConfig.from_json("configs/income_framework.json")
+        assert cfg.take_profit_pct == 0.2
+        for p in PROFILES.values():
+            for v in p.variants.values():
+                assert v.profit_take_frac == cfg.take_profit_pct
+        assert IRON_FLY.profit_take_frac == cfg.take_profit_pct
+
+    def test_management_applies_the_config_value(self):
+        from scripts.manage_income import income_exit_config
+        v = income_exit_config(CreditVariantConfig(name="x"), _cfg(take_profit_pct=0.2))
+        assert v.profit_take_frac == 0.2
+
+
+class TestStopLossFracFallback:
+    def test_variant_stop_used_when_no_policy(self, tmp_path):
+        from scripts.manage_credit import manage_position
+        j, rec = _open(tmp_path, _condor())
+        v = CreditVariantConfig(name=rec.kind, stop_loss_frac=1.0)
+        msg = manage_position(rec, _cfg(), j, PaperBroker(_cfg(), j),
+                              TestManagement._Losing(), None,
+                              date(2026, 9, 1), vcfg=v)
+        assert "stop_loss_frac" in j.get(rec.id).notes or "STOP LOSS" in msg
+        assert j.get(rec.id).status == "closed"

@@ -321,6 +321,10 @@ class ManagedBacktestEngine:
                                    n, pos.max_loss * 100.0 * n)
             if fired:
                 reason = "stop_loss"
+        elif reason is None and exit_cost is not None and \
+                cfg.stop_loss_frac is not None and \
+                exit_cost - pos.credit >= cfg.stop_loss_frac * pos.credit:
+            reason = "stop_loss"
         if reason is None and cfg.exit_on_breach and spot:
             if (pos.short_put_strike is not None and spot < pos.short_put_strike) or \
                (pos.short_call_strike is not None and spot > pos.short_call_strike):

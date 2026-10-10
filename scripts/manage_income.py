@@ -121,6 +121,15 @@ def grade_position(rec, journal: Journal, chain, cfg: IVSpikeConfig,
     return f"  vol grade: {signal.describe()}"
 
 
+def income_exit_config(vcfg: CreditVariantConfig,
+                       cfg: StrategyConfig) -> CreditVariantConfig:
+    """The income framework's profit target comes from ONE place:
+    take_profit_pct in configs/income_framework.json (0.20). Management
+    and the backtest both apply it through this function."""
+    from dataclasses import replace
+    return replace(vcfg, profit_take_frac=cfg.take_profit_pct)
+
+
 def variant_config(kind: str, profile) -> CreditVariantConfig:
     """Management parameters for a journaled position, looked up across
     every profile so a position entered under one profile is still managed
@@ -186,7 +195,8 @@ def main() -> int:
                                        spike_cfg, snap.spot, dte)
             print(manage_position(rec, cfg, journal, broker, provider,
                                   settlement_provider, today,
-                                  vcfg=variant_config(rec.kind, profile)))
+                                  vcfg=income_exit_config(
+                                      variant_config(rec.kind, profile), cfg)))
             if grade:
                 print(grade)
                 if "DEFEND" in grade or "CLOSE" in grade:

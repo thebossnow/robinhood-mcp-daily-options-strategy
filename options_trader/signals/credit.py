@@ -94,6 +94,10 @@ class CreditVariantConfig:
     # "vertical" = put/call verticals and condors chosen by delta;
     # "iron_butterfly" = short ATM straddle with wings (signals/butterfly.py).
     structure: str = "vertical"
+    # Per-variant loss stop as a multiple of entry credit, used ONLY when no
+    # account-level exit policy (StrategyConfig.stop_loss_mode) applies.
+    # None = no stop. No shipped variant sets it today.
+    stop_loss_frac: float | None = None
 
     def time_exit_threshold(self, dte_at_entry: int) -> int:
         # Floor of 1 DTE: never hold to expiration (operator decision

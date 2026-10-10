@@ -82,7 +82,7 @@ class StrategyConfig:
     # "position_max_loss" (loss >= max_loss_pct_position x position max loss).
     stop_loss_mode: str | None = None
     max_loss_pct_account: float = 0.05
-    max_loss_pct_position: float = 0.05
+    max_loss_pct_position: float = 0.50
 
     # --- Output ---
     top_n: int = 5

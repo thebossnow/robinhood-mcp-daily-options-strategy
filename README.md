@@ -702,7 +702,12 @@ Applies to every income-framework credit position (both profiles, CSPs and
 the iron butterfly); the credit book (`configs/credit_paper.json`) is
 unchanged.
 
-1. **Take profit at 20% of the credit** (`profit_take_frac = 0.20`).
+1. **Take profit at 20% of the credit**: `take_profit_pct: 0.2` in
+   `configs/income_framework.json` is the single source; `manage_income.py`
+   applies it to every position (`income_exit_config`), and the variants'
+   `profit_take_frac = 0.20` matches it (a test enforces that).
+   Without a stop_loss_mode, a variant's own `stop_loss_frac` (multiple of
+   credit) is the fallback loss stop.
 2. **Never hold to expiration.** Time exit at min(21 DTE, half the entry
    DTE), floored at 1 DTE so even a 1-DTE weekly entry is closed rather than
    settled. If the position can't be priced on an exit-due day,
@@ -714,7 +719,7 @@ unchanged.
      contracts) reaches `max_loss_pct_account` × `account_equity`
      (0.05 × $75,000 = $3,750).
    - `"stop_loss_mode": "position_max_loss"`: close at
-     `max_loss_pct_position` × the position's max loss.
+     `max_loss_pct_position` (default 0.50) × the position's max loss.
    - omit / `null`: no loss stop.
 
 Note: the 10/7/5% tiers already cap a position's max loss near that 5%,

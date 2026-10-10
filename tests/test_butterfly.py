@@ -69,7 +69,7 @@ class TestFrameworkRules:
         assert IRON_FLY.profit_take_frac == 0.20
         assert IRON_FLY.time_exit_threshold(40) == 20
         assert IRON_FLY.time_exit_threshold(44) == 21
-        assert not hasattr(IRON_FLY, "stop_loss_frac")
+        assert IRON_FLY.stop_loss_frac is None
         assert not IRON_FLY.exit_on_breach
 
     def test_off_by_default(self):
