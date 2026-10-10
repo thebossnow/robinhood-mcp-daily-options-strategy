@@ -20,8 +20,10 @@ class TestThreshold:
 
     def test_position_mode(self):
         assert StrategyConfig().max_loss_pct_position == 0.50
-        cfg = _cfg(stop_loss_mode="position_max_loss", max_loss_pct_position=0.05)
-        assert stop_threshold(cfg, 2000.0) == pytest.approx(100.0)
+        assert StrategyConfig.from_json(
+            "configs/income_framework.json").max_loss_pct_position == 0.5
+        cfg = _cfg(stop_loss_mode="position_max_loss")
+        assert stop_threshold(cfg, 2000.0) == pytest.approx(1000.0)
 
     def test_credit_book_has_no_stop(self):
         assert stop_threshold(StrategyConfig(), 1000.0) is None
