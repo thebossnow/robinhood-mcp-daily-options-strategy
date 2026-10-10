@@ -133,6 +133,9 @@ def variant_config(kind: str, profile) -> CreditVariantConfig:
     for p in PROFILES.values():
         if kind in p.variants:
             return p.variants[kind]
+    from options_trader.signals.butterfly import BUTTERFLY_VARIANTS
+    if kind in BUTTERFLY_VARIANTS:
+        return BUTTERFLY_VARIANTS[kind]
     return CreditVariantConfig(name=kind)
 
 

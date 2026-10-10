@@ -101,6 +101,12 @@ def manage_position(rec, cfg: StrategyConfig, journal: Journal,
                                      notes="profit target (daily check)")
         return (f"{tag}: PROFIT TARGET — captured {captured:.2f} of "
                 f"{rec.entry_debit:.2f}, pnl {closed.realized_pnl:+.2f}")
+    stop = getattr(vcfg, "stop_loss_frac", None)
+    if stop is not None and -captured >= stop * rec.entry_debit:
+        closed = broker.close_credit(rec.id, cost_mid, half_sum,
+                                     notes="stop loss (daily check)")
+        return (f"{tag}: STOP LOSS — loss {-captured:.2f} >= {stop:g}x "
+                f"credit {rec.entry_debit:.2f}, pnl {closed.realized_pnl:+.2f}")
     if dte <= vcfg.time_exit_threshold(dte_at_entry):
         closed = broker.close_credit(rec.id, cost_mid, half_sum,
                                      notes=f"time exit at {dte} DTE")

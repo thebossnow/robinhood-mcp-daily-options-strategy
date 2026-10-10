@@ -489,7 +489,7 @@ Both readings ship, in `options_trader/signals/income.py`:
 | confirm IV and delta first | kept, enforced | the scanner refuses an unconfirmed candidate instead of warning above an opened one. The delta is labelled `model-derived` vs `chain-quoted`; a leg with neither delta nor IV fails. yfinance and the MCP provider publish no delta column, so live entries there are model-derived; `--provider uw` quotes a real delta per contract and reports `chain-quoted` |
 | report price/strike/expiry/credit/risk% | kept, extended | `TradeReport`, plus breakeven, dollar capital, IV rank |
 | 20–30Δ short strikes | **→ 10–15Δ** | the sweep measured 30Δ put spreads at −$47 to −$62/contract; farther-OTM helped monotonically, and only 10Δ and 15Δ survived both halves |
-| condors collect ⅓ of width | **→ 0.06–0.20** | SPY chains pay ~0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A 0.33 floor selects no trade, not a better one |
+| condors collect ⅓ of width | **→ 0.20 in as_specified** (operator decision 2026-10-10); **0.06–0.20 in evidence_adjusted** | SPY chains pay ~0.15–0.25 at 20–30Δ with 2% wings, less at the validated geometry. A 0.33 floor selects no trade, not a better one |
 | IV rank > 30 preferred | **→ recorded, not gating** | a hard IVR ≥ 50 filter made sweep results sharply worse; that test was at 50, so the question is open at 30 — hence record every entry's IV rank rather than trusting or discarding the rule |
 | roll or close on an IV spike | **→ graded WATCH/DEFEND/CLOSE** | an IV spike is when the buy-back price is most inflated. The nearest measured analogue, the breach stop, fired on 46% of trades, all losers, −$160 average |
 | never hold through events | **→ split in two** | unsatisfiable as written: every 30–45 DTE index position spans a CPI print and usually an FOMC. Now an entry blackout plus a span report with a checkable premium test |
@@ -677,3 +677,23 @@ surfaced "edge" doesn't cash — fix the signals before building anything on
 top of them. The report prints its own caveats: same-day trades across
 correlated underlyings are not independent samples, and DoltHub results
 are optimistic on liquidity.
+
+## Iron butterfly (optional, paper only, off by default)
+
+`options_trader/signals/butterfly.py` adds `spy_iron_fly`: short ATM put and
+call at the same strike, long wings 3% of spot away, 30–45 DTE (target 38),
+credit floor 30% of width. It is an IRON butterfly (a credit structure)
+rather than a long call/put butterfly (a debit structure) so it reuses the
+credit book unchanged: `CreditPosition`, the paper broker and journal, the
+10/7/5% sizing tiers via `spread_capital_at_risk`, the event entry
+blackout, and the managed backtest. Exits: 50% profit target, time exit at
+min(21 DTE, half the entry DTE), and a loss stop at 1x the entry credit
+(`stop_loss_frac`; no other variant sets one). No breach stop — the shorts
+are ATM.
+
+It runs only when `configs/income_framework.json` sets
+`"enable_iron_butterfly": true`, or for one run with
+`scripts/scan_income.py --butterfly`. The cron entry job runs the scan with
+that config, so it stays OFF in cron until the flag is flipped; if flipped,
+it enters through the same book (heat cap, risk manager, journal) as the
+condors and is managed by `manage_income.py` at 12:50 PT.

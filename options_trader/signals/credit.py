@@ -91,6 +91,12 @@ class CreditVariantConfig:
     # so a 25-DTE entry isn't force-closed days after opening.
     time_exit_dte: int = 21
     time_exit_frac: float = 0.5
+    # Loss stop: close when the mark-to-close loss reaches this multiple of
+    # the entry credit. None = no loss stop (every pre-existing variant).
+    stop_loss_frac: float | None = None
+    # "vertical" = put/call verticals and condors chosen by delta;
+    # "iron_butterfly" = short ATM straddle with wings (signals/butterfly.py).
+    structure: str = "vertical"
 
     def time_exit_threshold(self, dte_at_entry: int) -> int:
         return min(self.time_exit_dte, int(dte_at_entry * self.time_exit_frac))
@@ -416,6 +422,11 @@ def build_position(chain: pd.DataFrame, spot: float, underlying: str,
     `chain` columns: type, strike, bid, ask, iv, and optionally delta.
     Entry credit pays slippage: a fraction of each leg's half-spread.
     """
+    if cfg.structure == "iron_butterfly":
+        from .butterfly import build_iron_butterfly
+        return build_iron_butterfly(chain, spot, underlying, entry_date,
+                                    expiration, dte, cfg,
+                                    slippage_half_spread_frac)
     t_years = max(dte, 1) / 365.0
     legs: list[CreditLeg] = []
 

@@ -64,7 +64,7 @@ class ClosedTrade:
     exit_cost: float         # per share, after exit slippage
     pnl: float               # per contract, dollars (x100)
     max_loss: float          # per contract, dollars
-    exit_reason: str         # profit_target | breach | time_exit | expired
+    exit_reason: str         # profit_target | stop_loss | breach | time_exit | expired
     mark_source: str         # marks | model | mixed | settlement
     short_put_strike: float | None
     short_call_strike: float | None
@@ -284,6 +284,10 @@ class ManagedBacktestEngine:
         if exit_cost is not None and \
                 pos.credit - exit_cost >= cfg.profit_take_frac * pos.credit:
             reason = "profit_target"
+        if reason is None and exit_cost is not None and \
+                cfg.stop_loss_frac is not None and \
+                exit_cost - pos.credit >= cfg.stop_loss_frac * pos.credit:
+            reason = "stop_loss"
         if reason is None and cfg.exit_on_breach and spot:
             if (pos.short_put_strike is not None and spot < pos.short_put_strike) or \
                (pos.short_call_strike is not None and spot > pos.short_call_strike):

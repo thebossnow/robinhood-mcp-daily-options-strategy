@@ -71,6 +71,11 @@ class StrategyConfig:
     vix_spike_pct: float = 0.30             # refuse if VIX rose this much...
     vix_spike_lookback_days: int = 5        # ...over this many trading days
 
+    # --- Optional structures (paper only) ---
+    # Iron butterfly (signals/butterfly.py). Off by default: when False the
+    # income scan never builds one, including from cron.
+    enable_iron_butterfly: bool = False
+
     # --- Output ---
     top_n: int = 5
 

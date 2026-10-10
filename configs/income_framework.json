@@ -13,5 +13,6 @@
   "vix_entry_ceiling": 30.0,
   "vix_spike_pct": 0.3,
   "vix_spike_lookback_days": 5,
-  "take_profit_pct": 0.5
+  "take_profit_pct": 0.5,
+  "enable_iron_butterfly": false
 }

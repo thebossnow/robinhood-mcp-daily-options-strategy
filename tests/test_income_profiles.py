@@ -68,8 +68,15 @@ class TestAsSpecifiedIsVerbatim:
         v = AS_SPECIFIED.variants["spec_put_spread_25d"]
         assert (v.min_dte, v.max_dte) == (30, 45)
 
-    def test_the_condor_demands_one_third_of_width(self):
-        assert AS_SPECIFIED.variants["spec_condor_20d"].min_credit_frac == 0.33
+    def test_the_condor_demands_twenty_percent_of_width(self):
+        # Operator decision 2026-10-10: lowered from the framework's 1/3.
+        assert AS_SPECIFIED.variants["spec_condor_20d"].min_credit_frac == 0.20
+
+    def test_only_the_condor_credit_floor_changed(self):
+        v = AS_SPECIFIED.variants["spec_condor_20d"]
+        assert (v.short_put_delta, v.short_call_delta, v.wing_width_frac,
+                v.min_dte, v.max_dte, v.target_dte) == \
+            (0.20, 0.20, 0.02, 30, 45, 38)
 
     def test_every_variant_takes_profit_at_fifty_percent(self):
         for p in PROFILES.values():
@@ -90,8 +97,11 @@ class TestAsSpecifiedIsVerbatim:
 class TestOneThirdOfWidthIsNotAvailable:
     """The single most consequential claim in the docs, exercised."""
 
-    def test_the_spec_condor_finds_no_trade(self):
-        assert _build(AS_SPECIFIED.variants["spec_condor_20d"]) is None
+    def test_a_one_third_floor_finds_no_trade(self):
+        from dataclasses import replace
+        third = replace(AS_SPECIFIED.variants["spec_condor_20d"],
+                        min_credit_frac=0.33)
+        assert _build(third) is None
 
     def test_the_same_condor_trades_once_the_floor_is_realistic(self):
         from dataclasses import replace

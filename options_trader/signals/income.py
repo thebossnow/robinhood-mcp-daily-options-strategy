@@ -122,11 +122,13 @@ _AS_SPEC_VARIANTS = {
         # keeps the repo's measured-achievable floor.
         min_credit_frac=0.15, exit_on_breach=False, profit_take_frac=0.50,
     ),
-    # "For iron condors, collect about one-third of the spread width."
+    # The framework says "collect about one-third of the spread width";
+    # the operator lowered this floor to 20% of width (decision 2026-10-10)
+    # because 1/3 is not offered at 20 delta / 2% wings on SPY.
     "spec_condor_20d": CreditVariantConfig(
         name="spec_condor_20d", short_put_delta=0.20, short_call_delta=0.20,
         wing_width_frac=0.02, min_dte=30, max_dte=45, target_dte=38,
-        min_credit_frac=0.33, exit_on_breach=False, profit_take_frac=0.50,
+        min_credit_frac=0.20, exit_on_breach=False, profit_take_frac=0.50,
     ),
     # "Sell weeklies on Monday or Tuesday of the expiration week."
     "spec_weekly_put_25d": CreditVariantConfig(
@@ -155,9 +157,10 @@ AS_SPECIFIED = IncomeProfile(
     portfolio_heat_cap_pct=None,
     allow_cash_secured_puts=True,
     notes=[
-        "spec_condor_20d demands 1/3 of width in credit; SPY chains at 20 "
-        "delta with 2% wings pay roughly 0.15-0.25, so this variant is "
-        "expected to report NO QUALIFYING TRADE nearly every week.",
+        "spec_condor_20d demands 20% of width in credit (operator change "
+        "from the framework's 1/3, 2026-10-10); SPY chains at 20 delta with "
+        "2% wings pay roughly 0.15-0.25, so expect it to fill some weeks "
+        "and refuse others.",
         "spec_weekly_put_25d enters at ~4 DTE at 25 delta: gamma-dominated, "
         "and outside any window this repo has backtested.",
         "No book-level risk cap: three 10%-tier positions is 30% of the "

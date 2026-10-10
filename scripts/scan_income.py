@@ -119,6 +119,10 @@ def main() -> int:
     ap.add_argument("--iv-history", default=IV_HISTORY_PATH)
     ap.add_argument("--force", action="store_true",
                     help="Ignore the Monday/Tuesday entry-cadence gate")
+    ap.add_argument("--butterfly", action="store_true",
+                    help="Also scan the SPY iron butterfly for this run "
+                         "(paper only). Without this flag it runs only when "
+                         "the config sets enable_iron_butterfly: true.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print candidates and reports, journal nothing")
     args = ap.parse_args()
@@ -185,7 +189,12 @@ def main() -> int:
         return chain_cache[expiration]
 
     # --- credit structures ---
-    for name, vcfg in profile.variants.items():
+    variants = dict(profile.variants)
+    if args.butterfly or cfg.enable_iron_butterfly:
+        from options_trader.signals.butterfly import BUTTERFLY_VARIANTS
+        variants.update(BUTTERFLY_VARIANTS)
+        print("iron butterfly: ENABLED for this run (paper only)")
+    for name, vcfg in variants.items():
         expiration = pick_expiration(expirations, today, vcfg.min_dte,
                                      vcfg.max_dte, vcfg.target_dte)
         if expiration is None:
@@ -295,7 +304,8 @@ def main() -> int:
                           f"{sizing.summary()}", args.dry_run)
             continue
 
-        structure = ("iron_condor" if vcfg.short_call_delta and vcfg.short_put_delta
+        structure = ("iron_butterfly" if vcfg.structure == "iron_butterfly"
+                     else "iron_condor" if vcfg.short_call_delta and vcfg.short_put_delta
                      else "put_credit_spread")
         notes = list(wing_notes)
         if not ok_prem:

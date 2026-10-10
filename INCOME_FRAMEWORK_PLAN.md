@@ -8,7 +8,7 @@ before any of it is trusted.
 ## Goal
 
 Take a prose premium-selling framework — cash-secured puts and iron
-condors, 20–30Δ shorts, 30–45 DTE, IV rank > 30, ⅓-of-width condor credit,
+condors, 20–30Δ shorts, 30–45 DTE, IV rank > 30, ⅓-of-width condor credit (lowered to 20% in as_specified by operator decision, 2026-10-10),
 50% profit take, roll-or-close on an IV spike, 10/7/5% sizing tiers — and
 make it (a) runnable, (b) testable, and (c) checked against what this
 repository has already measured, rather than adopted on the strength of how
@@ -176,3 +176,23 @@ window narrower than the one that was fit. The order of operations is
 unchanged from the rest of the repo — backtest, then paper, then the live
 gate in README.md — and the income framework has completed none of the
 three.
+
+## Iron butterfly (optional, paper only, off by default)
+
+`options_trader/signals/butterfly.py` adds `spy_iron_fly`: short ATM put and
+call at the same strike, long wings 3% of spot away, 30–45 DTE (target 38),
+credit floor 30% of width. It is an IRON butterfly (a credit structure)
+rather than a long call/put butterfly (a debit structure) so it reuses the
+credit book unchanged: `CreditPosition`, the paper broker and journal, the
+10/7/5% sizing tiers via `spread_capital_at_risk`, the event entry
+blackout, and the managed backtest. Exits: 50% profit target, time exit at
+min(21 DTE, half the entry DTE), and a loss stop at 1x the entry credit
+(`stop_loss_frac`; no other variant sets one). No breach stop — the shorts
+are ATM.
+
+It runs only when `configs/income_framework.json` sets
+`"enable_iron_butterfly": true`, or for one run with
+`scripts/scan_income.py --butterfly`. The cron entry job runs the scan with
+that config, so it stays OFF in cron until the flag is flipped; if flipped,
+it enters through the same book (heat cap, risk manager, journal) as the
+condors and is managed by `manage_income.py` at 12:50 PT.
