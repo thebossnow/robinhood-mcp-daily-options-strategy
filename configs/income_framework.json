@@ -15,7 +15,7 @@
   "vix_spike_lookback_days": 5,
   "take_profit_pct": 0.2,
   "enable_iron_butterfly": false,
-  "stop_loss_mode": "account_equity",
+  "stop_loss_mode": "position_max_loss",
   "max_loss_pct_account": 0.05,
   "max_loss_pct_position": 0.5
 }

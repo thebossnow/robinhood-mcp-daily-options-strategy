@@ -2,10 +2,10 @@
 
 Two modes, chosen in configs/income_framework.json:
 
-  account_equity     (default) close when the position's unrealized loss in
+  account_equity     (alternate) close when the position's unrealized loss in
                      dollars reaches max_loss_pct_account x account equity
                      (0.05 x $75,000 = $3,750 on the paper account).
-  position_max_loss  close when the unrealized loss reaches
+  position_max_loss  (default in income_framework.json) close when the unrealized loss reaches
                      max_loss_pct_position x the position's own max loss.
 
 stop_loss_mode = None (StrategyConfig's default) disables the stop, so the

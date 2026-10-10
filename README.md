@@ -485,7 +485,7 @@ Both readings ship, in `options_trader/signals/income.py`:
 |---|---|---|
 | close at 50% of credit | **→ 20%** (operator decision 2026-10-10) | `profit_take_frac = 0.20` on every income variant |
 | (new) never hold to expiration | **added** (operator decision 2026-10-10) | time exit at min(21 DTE, half entry DTE), floored at 1 DTE; an unpriceable exit-due position is flagged CLOSE MANUALLY |
-| (new) loss stop | **added: 5% of account equity** (operator decision 2026-10-10) | `stop_loss_mode: account_equity`, `max_loss_pct_account: 0.05` ($3,750 at $75k); alternate `position_max_loss` at 0.5 of max loss is configurable but not the default |
+| (new) loss stop | **added: 50% of position max loss** (operator decision 2026-10-10) | `stop_loss_mode: position_max_loss`, `max_loss_pct_position: 0.5`; alternate `account_equity` at 5% ($3,750 at $75k) |
 | (new) iron butterfly | **added, OFF by default** | `enable_iron_butterfly: false`; see "Iron butterfly" below |
 | 30–45 DTE monthlies | kept | both profiles target 40 DTE |
 | enter Monday/Tuesday | kept | `IncomeProfile.entry_weekdays` |
@@ -717,13 +717,16 @@ unchanged.
    `manage_income.py` logs `TIME EXIT DUE … CLOSE MANUALLY`.
 3. **Loss stop** (`risk/exit_policy.py`), set in
    `configs/income_framework.json`:
-   - `"stop_loss_mode": "account_equity"` (default): close when the
+   - `"stop_loss_mode": "position_max_loss"` (**default**, operator decision
+     2026-10-10): close when the unrealized loss reaches
+     `max_loss_pct_position` (0.5) × the position's max loss.
+   - `"stop_loss_mode": "account_equity"` (alternate): close when the
      unrealized loss (cost to close incl. slippage − credit, × 100 ×
      contracts) reaches `max_loss_pct_account` × `account_equity`
      (0.05 × $75,000 = $3,750).
-   - `"stop_loss_mode": "position_max_loss"`: close at
-     `max_loss_pct_position` (default 0.50) × the position's max loss.
    - omit / `null`: no loss stop.
 
 Note: the 10/7/5% tiers already cap a position's max loss near that 5%,
-so at $75k the account-equity stop can only fire close to max loss.
+so at $75k the account-equity stop could only fire close to max loss —
+it never fired in the 2023–25 backtest, which is why the default is 50% of
+position max loss.

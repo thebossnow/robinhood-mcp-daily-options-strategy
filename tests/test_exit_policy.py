@@ -15,9 +15,16 @@ INCOME_JSON = Path(__file__).resolve().parent.parent / "configs" / "income_frame
 
 
 class TestThreshold:
-    def test_income_config_defaults_to_account_equity_5pct(self):
-        cfg = StrategyConfig.from_json("configs/income_framework.json")
-        assert cfg.stop_loss_mode == "account_equity"
+    def test_income_config_defaults_to_half_of_position_max_loss(self):
+        # Operator decision 2026-10-10 (afternoon).
+        cfg = StrategyConfig.from_json(INCOME_JSON)
+        assert cfg.stop_loss_mode == "position_max_loss"
+        assert cfg.max_loss_pct_position == 0.5
+        assert stop_threshold(cfg, 3000.0) == pytest.approx(1500.0)
+
+    def test_account_equity_remains_the_alternate(self):
+        cfg = StrategyConfig.from_json(INCOME_JSON)
+        cfg.stop_loss_mode = "account_equity"
         assert cfg.max_loss_pct_account == 0.05
         assert stop_threshold(cfg, 999.0) == pytest.approx(3750.0)
 

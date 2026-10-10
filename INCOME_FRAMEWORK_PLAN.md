@@ -213,13 +213,16 @@ unchanged.
    `manage_income.py` logs `TIME EXIT DUE … CLOSE MANUALLY`.
 3. **Loss stop** (`risk/exit_policy.py`), set in
    `configs/income_framework.json`:
-   - `"stop_loss_mode": "account_equity"` (default): close when the
+   - `"stop_loss_mode": "position_max_loss"` (**default**, operator decision
+     2026-10-10): close when the unrealized loss reaches
+     `max_loss_pct_position` (0.5) × the position's max loss.
+   - `"stop_loss_mode": "account_equity"` (alternate): close when the
      unrealized loss (cost to close incl. slippage − credit, × 100 ×
      contracts) reaches `max_loss_pct_account` × `account_equity`
      (0.05 × $75,000 = $3,750).
-   - `"stop_loss_mode": "position_max_loss"`: close at
-     `max_loss_pct_position` (default 0.50) × the position's max loss.
    - omit / `null`: no loss stop.
 
 Note: the 10/7/5% tiers already cap a position's max loss near that 5%,
-so at $75k the account-equity stop can only fire close to max loss.
+so at $75k the account-equity stop could only fire close to max loss —
+it never fired in the 2023–25 backtest, which is why the default is 50% of
+position max loss.
