@@ -26,7 +26,8 @@ tempting moves are both wrong:
 
 So `options_trader/signals/income.py` ships two profiles. `as_specified` is
 verbatim and runnable — which is what makes its refusals *observable*
-instead of arguable. `evidence_adjusted` is the default and changes only
+instead of arguable. `as_specified` is the default (operator decision, 2026-10-10; review at
+30/60/90 days). `evidence_adjusted` is the selectable alternative and changes only
 parameters with a measurement behind them. Every difference is annotated in
 the module docstring with the specific finding it rests on.
 

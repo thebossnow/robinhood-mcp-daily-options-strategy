@@ -148,8 +148,8 @@ BEFORE ANY SCAN
    If the structures you intend to sell do not fit, say so plainly and
    stop. Do not proceed to a scan that can only end in a refusal.
 3. Confirm which profile you are running and say it out loud:
-     evidence_adjusted  (default) — measured parameters
-     as_specified                 — the framework verbatim, for comparison
+     as_specified       (default) — the written playbook, verbatim
+     evidence_adjusted            — measured parameters, selectable alternative
    If asked for as_specified, run it and report what it refuses. Do not
    quietly substitute the other one.
 

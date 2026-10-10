@@ -28,7 +28,8 @@
 # Daily digest 16:00 ET (= 13:00 PT): open positions, P&L vs target, stats
 0 13 * * 1-5 /home/banderson/robinhood-mcp-daily-options-strategy/scripts/daily_digest.sh
 
-# Income framework (evidence_adjusted profile — see INCOME_AGENT_PROMPT.md).
+# Income framework (as_specified profile by default; INCOME_PROFILE and
+# OPTIONS_REPO_DIR env vars override — see INCOME_AGENT_PROMPT.md).
 # Entries 10:35 ET (= 7:35 PT), five minutes after the credit scan so the two
 # don't contend for the same MCP chain calls; scan_income.py self-gates to
 # Mondays and Tuesdays. Management daily 15:50 ET (= 12:50 PT).

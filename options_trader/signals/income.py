@@ -227,7 +227,9 @@ PROFILES: dict[str, IncomeProfile] = {
     AS_SPECIFIED.name: AS_SPECIFIED,
     EVIDENCE_ADJUSTED.name: EVIDENCE_ADJUSTED,
 }
-DEFAULT_PROFILE = EVIDENCE_ADJUSTED.name
+# Default is the operator's written playbook (decision 2026-10-10); the
+# evidence-adjusted profile stays selectable via --profile / INCOME_PROFILE.
+DEFAULT_PROFILE = AS_SPECIFIED.name
 
 
 def get_profile(name: str) -> IncomeProfile:

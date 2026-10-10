@@ -49,8 +49,8 @@ class TestProfilesRegistered:
     def test_both_profiles_available(self):
         assert set(PROFILES) == {"as_specified", "evidence_adjusted"}
 
-    def test_default_is_the_adjusted_one(self):
-        assert DEFAULT_PROFILE == "evidence_adjusted"
+    def test_default_is_the_written_playbook(self):
+        assert DEFAULT_PROFILE == "as_specified"
 
     def test_unknown_profile_raises_with_the_options(self):
         with pytest.raises(KeyError, match="evidence_adjusted"):

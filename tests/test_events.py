@@ -136,3 +136,29 @@ class TestPremiumCompensates:
     def test_move_estimate_is_a_tunable_not_a_constant(self):
         assert premium_compensates(6.00, 762.60, 1,
                                    typical_event_move_pct=0.005)[0]
+
+
+class TestRealCalendarFile:
+    """configs/events.json is the file scan_income.py reads by default."""
+
+    def test_scan_income_default_points_at_events_json(self):
+        src = open("scripts/scan_income.py").read()
+        assert 'default="configs/events.json"' in src
+
+    def test_real_calendar_loads_and_blacks_out_cpi_and_fomc(self):
+        cal = EventCalendar.from_json("configs/events.json")
+        assert cal.has_dates()
+        kinds = {e.kind for e in cal.events}
+        assert {"CPI", "FOMC"} <= kinds
+        # Nov 10 2026 CPI: entering the day before is blacked out.
+        assert not check_events(date(2026, 11, 9), date(2026, 12, 18), cal).allowed
+        # Oct 28 2026 FOMC decision.
+        assert not check_events(date(2026, 10, 27), date(2026, 12, 4), cal).allowed
+
+    def test_real_calendar_dates_are_valid_and_unique(self):
+        import json
+        raw = json.load(open("configs/events.json"))["events"]
+        keys = [(e["date"], e["kind"]) for e in raw]
+        assert len(keys) == len(set(keys))
+        for d, _ in keys:
+            date.fromisoformat(d)
