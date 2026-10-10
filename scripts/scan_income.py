@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from options_trader.config import StrategyConfig
+from options_trader.config import StrategyConfig, load_income_config
 from options_trader.execution.paper import PaperBroker
 from options_trader.journal import Journal
 from options_trader.reporting import report_credit_position, report_csp_position
@@ -129,7 +129,6 @@ def main() -> int:
 
     today = date.today()
     profile = get_profile(args.profile)
-    from scripts.manage_income import load_income_config
     cfg = load_income_config(args.config)
     equity = cfg.account_equity
 

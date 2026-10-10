@@ -102,3 +102,15 @@ class StrategyConfig:
     @property
     def daily_loss_limit(self) -> float:
         return self.account_equity * self.daily_loss_limit_pct
+
+
+def load_income_config(path) -> StrategyConfig:
+    """Load the income config, failing LOUDLY if take_profit_pct is absent:
+    StrategyConfig's own default (0.75) belongs to the debit book and must
+    never silently become the income framework's profit target."""
+    raw = json.loads(Path(path).read_text())   # missing file raises
+    if "take_profit_pct" not in raw:
+        raise ValueError(f"{path}: take_profit_pct is required for the income "
+                         "framework (expected 0.2); refusing to fall back to "
+                         "StrategyConfig's 0.75 default")
+    return StrategyConfig(**raw)

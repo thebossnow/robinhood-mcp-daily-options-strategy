@@ -1,5 +1,6 @@
 """Income-framework exit policy: 20% target, account-equity loss stop."""
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +10,8 @@ from options_trader.risk.exit_policy import stop_hit, stop_threshold
 from options_trader.signals.butterfly import IRON_FLY
 from options_trader.signals.credit import CreditVariantConfig
 from tests.test_income_scripts import _cfg, _chain, _condor, _open
+
+INCOME_JSON = Path(__file__).resolve().parent.parent / "configs" / "income_framework.json"
 
 
 class TestThreshold:
@@ -157,8 +160,8 @@ class TestBacktestStopFallback:
 class TestIncomeConfigLoading:
     def test_missing_take_profit_fails_loudly(self, tmp_path):
         import json
-        from scripts.manage_income import load_income_config
-        raw = json.load(open("configs/income_framework.json"))
+        from options_trader.config import load_income_config
+        raw = json.load(open(INCOME_JSON))
         del raw["take_profit_pct"]
         p = tmp_path / "c.json"
         p.write_text(json.dumps(raw))
@@ -166,11 +169,10 @@ class TestIncomeConfigLoading:
             load_income_config(p)
 
     def test_missing_file_fails_loudly(self, tmp_path):
-        from scripts.manage_income import load_income_config
+        from options_trader.config import load_income_config
         with pytest.raises(FileNotFoundError):
             load_income_config(tmp_path / "nope.json")
 
     def test_real_config_loads_20pct(self):
-        from scripts.manage_income import load_income_config
-        assert load_income_config(
-            "configs/income_framework.json").take_profit_pct == 0.2
+        from options_trader.config import load_income_config
+        assert load_income_config(INCOME_JSON).take_profit_pct == 0.2

@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from options_trader.config import StrategyConfig
+from options_trader.config import StrategyConfig, load_income_config  # noqa: F401
 from options_trader.execution.paper import PaperBroker
 from options_trader.journal import Journal
 from options_trader.risk.iv_spike import IVSpikeConfig, assess
@@ -119,20 +119,6 @@ def grade_position(rec, journal: Journal, chain, cfg: IVSpikeConfig,
     if signal.action == "NONE":
         return None
     return f"  vol grade: {signal.describe()}"
-
-
-def load_income_config(path) -> StrategyConfig:
-    """Load the income config, failing LOUDLY if take_profit_pct is absent:
-    StrategyConfig's own default (0.75) belongs to the debit book and must
-    never silently become the income framework's profit target."""
-    import json
-    from pathlib import Path
-    raw = json.loads(Path(path).read_text())   # missing file raises
-    if "take_profit_pct" not in raw:
-        raise ValueError(f"{path}: take_profit_pct is required for the income "
-                         "framework (expected 0.2); refusing to fall back to "
-                         "StrategyConfig's 0.75 default")
-    return StrategyConfig(**raw)
 
 
 def income_exit_config(vcfg: CreditVariantConfig,
