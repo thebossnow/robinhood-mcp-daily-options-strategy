@@ -129,7 +129,8 @@ def main() -> int:
 
     today = date.today()
     profile = get_profile(args.profile)
-    cfg = StrategyConfig.from_json(args.config)
+    from scripts.manage_income import load_income_config
+    cfg = load_income_config(args.config)
     equity = cfg.account_equity
 
     print(f"=== income scan {today} | profile: {profile.name} ===")

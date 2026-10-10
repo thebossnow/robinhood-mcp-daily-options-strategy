@@ -152,3 +152,25 @@ class TestBacktestStopFallback:
 
     def test_no_stop_anywhere_holds(self):
         assert self._exit(StrategyConfig(), None) is None
+
+
+class TestIncomeConfigLoading:
+    def test_missing_take_profit_fails_loudly(self, tmp_path):
+        import json
+        from scripts.manage_income import load_income_config
+        raw = json.load(open("configs/income_framework.json"))
+        del raw["take_profit_pct"]
+        p = tmp_path / "c.json"
+        p.write_text(json.dumps(raw))
+        with pytest.raises(ValueError, match="take_profit_pct"):
+            load_income_config(p)
+
+    def test_missing_file_fails_loudly(self, tmp_path):
+        from scripts.manage_income import load_income_config
+        with pytest.raises(FileNotFoundError):
+            load_income_config(tmp_path / "nope.json")
+
+    def test_real_config_loads_20pct(self):
+        from scripts.manage_income import load_income_config
+        assert load_income_config(
+            "configs/income_framework.json").take_profit_pct == 0.2
