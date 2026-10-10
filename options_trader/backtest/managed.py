@@ -314,8 +314,8 @@ class ManagedBacktestEngine:
         if exit_cost is not None and \
                 pos.credit - exit_cost >= cfg.profit_take_frac * pos.credit:
             reason = "profit_target"
-        if reason is None and exit_cost is not None and \
-                self.exit_policy is not None:
+        policy_mode = getattr(self.exit_policy, "stop_loss_mode", None)
+        if reason is None and exit_cost is not None and policy_mode is not None:
             n = self.contracts_for(pos) if self.contracts_for else 1
             fired, _, _ = stop_hit(self.exit_policy, exit_cost - pos.credit,
                                    n, pos.max_loss * 100.0 * n)

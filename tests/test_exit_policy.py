@@ -123,3 +123,30 @@ class TestStopLossFracFallback:
                               date(2026, 9, 1), vcfg=v)
         assert "stop_loss_frac" in j.get(rec.id).notes or "STOP LOSS" in msg
         assert j.get(rec.id).status == "closed"
+
+
+class TestBacktestStopFallback:
+    """stop_loss_frac must apply whenever no stop_loss_mode is set, even
+    when an exit_policy object IS passed (review bug, 2026-10-10)."""
+
+    def _exit(self, policy, frac):
+        import pandas as pd
+        from dataclasses import replace
+        from options_trader.backtest.managed import ManagedBacktestEngine
+        eng = ManagedBacktestEngine(None, {}, exit_policy=policy)
+        v = replace(CreditVariantConfig(name="income_condor15"),
+                    profit_take_frac=0.2, exit_on_breach=False,
+                    stop_loss_frac=frac)
+        return eng._check_exit(_condor(), v, "2026-08-25", 600.0,
+                               pd.DataFrame(), ["2026-08-25"])
+
+    def test_fallback_fires_with_policy_but_no_mode(self):
+        t = self._exit(StrategyConfig(), 1.0)
+        assert t is not None and t.exit_reason == "stop_loss"
+
+    def test_fallback_fires_with_no_policy(self):
+        t = self._exit(None, 1.0)
+        assert t is not None and t.exit_reason == "stop_loss"
+
+    def test_no_stop_anywhere_holds(self):
+        assert self._exit(StrategyConfig(), None) is None
