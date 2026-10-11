@@ -201,6 +201,9 @@ class TestValidatedVariants:
         p = VALIDATED["spy_put10"]
         assert p.short_put_delta == 0.10 and p.short_call_delta is None
         assert p.exit_on_breach is False
+        w = VALIDATED["spy_weekly_atr15"]
+        assert w.atr_mult == 2.0 and w.short_put_delta == 0.15
+        assert w.max_dte <= 14
         assert VALIDATED_UNIVERSE == ["SPY"]
 
     def test_intrinsic_from_leg_dicts(self):

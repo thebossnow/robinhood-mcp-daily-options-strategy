@@ -9,12 +9,11 @@ from options_trader.signals.wheel import build_phase_a
 from tests.test_wheel import make_chain
 
 
-class TestUniverseNarrowedToCoveredTickers:
-    def test_no_dropped_ticker_appears_anywhere(self):
-        dropped = {"SOFI", "RIVN", "MARA", "CLSK", "SNAP", "AMC"}
+class TestUniverseCoversAllSpecTickers:
+    def test_full_spec_universe_is_covered(self):
         covered = set(S1_TICKERS) | set(S2_TICKERS) | set(S3_TICKERS)
-        assert covered.isdisjoint(dropped)
-        assert covered == {"F", "AAL", "GME"}
+        assert covered == {"F", "AAL", "SOFI", "RIVN", "GME", "SNAP", "AMC",
+                           "MARA", "CLSK"}
 
 
 class TestS1WheelCore:

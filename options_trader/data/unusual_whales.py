@@ -219,6 +219,13 @@ class UWHistory:
             logger.warning("%s %s: outside historical access window — %s",
                            symbol, day, exc)
             return None   # not cached: a wider access window later should retry
+        except requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            if code in (401, 403):
+                logger.warning("%s %s: UW %s — treating as a dataset gap",
+                               symbol, day, code)
+                return None
+            raise
         import json
         path.write_text(json.dumps(rows))
         return rows

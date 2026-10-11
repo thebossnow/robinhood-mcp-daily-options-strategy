@@ -70,6 +70,7 @@ class ClosedTrade:
     short_call_strike: float | None
     spot_at_entry: float
     spot_at_exit: float
+    atr_at_entry: float | None = None
 
     def to_dict(self) -> dict:
         from dataclasses import asdict
@@ -146,10 +147,14 @@ class ManagedBacktestEngine:
     MAX_DTE_FETCH = 50   # covers entry window (<=45 DTE) and every held exp
 
     def __init__(self, history, spot_lookup: dict,
-                 slippage_half_spread_frac: float = 0.5):
+                 slippage_half_spread_frac: float = 0.5,
+                 atr_lookup: dict | None = None):
         self.history = history
         self.spots = spot_lookup
         self.slip_frac = slippage_half_spread_frac
+        # (symbol, YYYY-MM-DD) -> ATR-14 as of that day. Required for
+        # variants with atr_mult; ignored otherwise.
+        self.atr_lookup = atr_lookup or {}
 
     def run(self, symbols: list[str], start: str, end: str,
             variants: list[CreditVariantConfig],
@@ -204,19 +209,23 @@ class ManagedBacktestEngine:
     def _enter(self, symbol: str, day: str, spot: float, chains: pd.DataFrame,
                variants: list[CreditVariantConfig],
                result: ManagedBacktestResult):
-        v0 = variants[0]   # shipped variants share the DTE window
-        exps = sorted({str(e)[:10] for e in chains["expiration"]})
-        exps = [e for e in exps if v0.min_dte <= _dte(day, e) <= v0.max_dte]
-        if not exps:
-            result.skipped_no_expiration += 1
-            return []
-        expiration = min(exps, key=lambda e: abs(_dte(day, e) - v0.target_dte))
-        chain = chains[chains["expiration"].astype(str).str[:10] == expiration]
-
+        all_exps = sorted({str(e)[:10] for e in chains["expiration"]})
         entered = []
         for cfg in variants:
+            window = [e for e in all_exps
+                      if cfg.min_dte <= _dte(day, e) <= cfg.max_dte]
+            if not window:
+                result.skipped_no_expiration += 1
+                continue
+            expiration = min(window, key=lambda e: abs(_dte(day, e) - cfg.target_dte))
+            chain = chains[chains["expiration"].astype(str).str[:10] == expiration]
+            atr = self.atr_lookup.get((symbol, day))
+            if cfg.atr_mult is not None and (atr is None or atr <= 0):
+                result.skipped_no_position += 1
+                continue
             pos = build_position(chain, spot, symbol, day, expiration,
-                                 _dte(day, expiration), cfg, self.slip_frac)
+                                 _dte(day, expiration), cfg, self.slip_frac,
+                                 atr=atr)
             if pos is None:
                 result.skipped_no_position += 1
             else:
@@ -243,7 +252,14 @@ class ManagedBacktestEngine:
             bid = ask = None
             if not row.empty:
                 bid, ask = float(row.iloc[0]["bid"]), float(row.iloc[0]["ask"])
-                if ask <= 0 or ask < bid:
+                # Asserting the GOOD condition (not the bad one) matters: a
+                # NaN bid/ask (seen live on a thin Databento quote) satisfies
+                # neither `ask <= 0` nor `ask < bid` -- both compare False
+                # against NaN -- so the old inverted check let a NaN quote
+                # through as if it were a real mid, corrupting exit_cost and
+                # then the trade's P&L and the running equity total. This
+                # form fails closed on NaN instead.
+                if not (ask > 0 and bid >= 0 and ask >= bid):
                     bid = ask = None
             if bid is not None:
                 cost += -leg.side * (bid + ask) / 2.0
@@ -335,4 +351,5 @@ class ManagedBacktestEngine:
             short_call_strike=pos.short_call_strike,
             spot_at_entry=pos.spot_at_entry,
             spot_at_exit=float(spot) if spot else 0.0,
+            atr_at_entry=self.atr_lookup.get((pos.underlying, pos.entry_date)),
         )

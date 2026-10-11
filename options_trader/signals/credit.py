@@ -63,6 +63,32 @@ def bs_price(option_type: str, spot: float, strike: float, iv: float,
     return strike * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
 
 
+def implied_vol_from_price(option_type: str, price: float, spot: float,
+                            strike: float, t_years: float,
+                            rate: float = 0.0) -> float:
+    """Bisection solve for IV given a market price. Used for sources that
+    quote raw bid/ask but no IV (Databento's OPRA feed, unlike DoltHub/UW).
+    Returns 0.0 when the price is at or below intrinsic (no vol explains it)
+    or inputs are degenerate — callers already treat iv<=0 as "unusable"."""
+    if spot <= 0 or strike <= 0 or t_years <= 0 or price <= 0:
+        return 0.0
+    intrinsic = max(0.0, spot - strike) if option_type == "call" else max(0.0, strike - spot)
+    if price <= intrinsic:
+        return 0.0
+    lo, hi = 1e-4, 5.0
+    if bs_price(option_type, spot, strike, hi, t_years, rate) < price:
+        return 0.0   # price implies >500% vol — treat as unquotable
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if bs_price(option_type, spot, strike, mid, t_years, rate) < price:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-5:
+            break
+    return (lo + hi) / 2.0
+
+
 @dataclass
 class CreditVariantConfig:
     """One tradeable variant. Deltas are absolute values."""
@@ -97,6 +123,11 @@ class CreditVariantConfig:
     # ships off; this is a direct dollar-loss stop, on by default nowhere
     # in this repo until a caller opts in.
     hard_stop_credit_mult: float | None = None
+    # If set, the short strike is the *further* of (target delta, ATR band).
+    # Puts: short <= spot - atr_mult * ATR. Calls: short >= spot + atr_mult * ATR.
+    # A 0.15Δ put inside 2×ATR is treated as too close; the short is pushed
+    # out to the listed strike at the band. None disables (delta-only).
+    atr_mult: float | None = None
 
     def time_exit_threshold(self, dte_at_entry: int) -> int:
         return min(self.time_exit_dte, int(dte_at_entry * self.time_exit_frac))
@@ -136,6 +167,16 @@ VALIDATED: dict[str, CreditVariantConfig] = {
         wing_width_frac=0.02, min_credit_frac=0.02, exit_on_breach=False,
         min_dte=5, max_dte=14, target_dte=7,
         time_exit_dte=4, time_exit_frac=0.5,
+    ),
+    # Weekly put credit: 15-delta short, then push to 2×ATR if that delta
+    # sits inside the structural band. 5-14 DTE. Paper only; not in the
+    # 2022-26 DoltHub sweep (no weeklies then).
+    "spy_weekly_atr15": CreditVariantConfig(
+        name="spy_weekly_atr15", short_put_delta=0.15, short_call_delta=None,
+        wing_width_frac=0.02, min_credit_frac=0.02, exit_on_breach=False,
+        min_dte=5, max_dte=14, target_dte=7,
+        time_exit_dte=4, time_exit_frac=0.5,
+        atr_mult=2.0,
     ),
 }
 # The sweep found every config negative once XLF/XLE were included; the
@@ -314,6 +355,45 @@ def _pick_short(side: pd.DataFrame, target_delta: float,
     return ok.loc[(ok["abs_delta"] - target_delta).abs().idxmin()]
 
 
+def atr_short_bound(spot: float, atr: float, atr_mult: float,
+                    opt_type: str) -> float:
+    """Structural short-strike boundary. Puts at or below, calls at or above."""
+    if atr <= 0 or atr_mult <= 0 or spot <= 0:
+        raise ValueError("spot, atr, and atr_mult must be positive")
+    width = atr_mult * atr
+    if opt_type == "put":
+        return spot - width
+    if opt_type == "call":
+        return spot + width
+    raise ValueError(f"opt_type must be 'call' or 'put', got {opt_type!r}")
+
+
+def apply_atr_floor(side: pd.DataFrame, short: pd.Series, spot: float,
+                    atr: float, atr_mult: float, opt_type: str,
+                    min_bid: float) -> pd.Series | None:
+    """If the delta short sits inside the ATR band, push it further OTM.
+
+    Never pulls a short closer to the money. Returns None when no listed
+    strike satisfies the band.
+    """
+    bound = atr_short_bound(spot, atr, atr_mult, opt_type)
+    k = float(short["strike"])
+    if opt_type == "put" and k <= bound:
+        return short
+    if opt_type == "call" and k >= bound:
+        return short
+    quoted = side[side.apply(_usable_quote, axis=1) & (side["bid"] >= min_bid)]
+    if opt_type == "put":
+        cands = quoted[quoted["strike"] <= bound]
+        if cands.empty:
+            return None
+        return cands.loc[cands["strike"].idxmax()]
+    cands = quoted[quoted["strike"] >= bound]
+    if cands.empty:
+        return None
+    return cands.loc[cands["strike"].idxmin()]
+
+
 def _pick_wing(side: pd.DataFrame, short_strike: float, spot: float,
                wing_width_frac: float, opt_type: str) -> pd.Series | None:
     """Strike nearest to (short ± wing width), strictly further OTM."""
@@ -345,13 +425,18 @@ def _leg(row: pd.Series, opt_type: str, side: int) -> CreditLeg:
 def build_position(chain: pd.DataFrame, spot: float, underlying: str,
                    entry_date: str, expiration: str, dte: int,
                    cfg: CreditVariantConfig,
-                   slippage_half_spread_frac: float = 0.5) -> CreditPosition | None:
+                   slippage_half_spread_frac: float = 0.5,
+                   atr: float | None = None) -> CreditPosition | None:
     """Build one credit position from a single-expiration chain, or None if
     any leg can't be selected or the credit gate fails.
 
     `chain` columns: type, strike, bid, ask, iv, and optionally delta.
     Entry credit pays slippage: a fraction of each leg's half-spread.
+    When `cfg.atr_mult` is set, `atr` is required and the short strike is
+    the further of target-delta and the ATR band.
     """
+    if cfg.atr_mult is not None and (atr is None or atr <= 0):
+        return None
     t_years = max(dte, 1) / 365.0
     legs: list[CreditLeg] = []
 
@@ -366,6 +451,13 @@ def build_position(chain: pd.DataFrame, spot: float, underlying: str,
         short = _pick_short(side, target, cfg.min_short_bid)
         if short is None:
             return None
+        if cfg.atr_mult is not None:
+            short = apply_atr_floor(
+                side, short, spot, atr, cfg.atr_mult, opt_type,
+                cfg.min_short_bid,
+            )
+            if short is None:
+                return None
         wing = _pick_wing(side, float(short["strike"]), spot,
                           cfg.wing_width_frac, opt_type)
         if wing is None:

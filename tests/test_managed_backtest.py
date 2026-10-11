@@ -3,13 +3,17 @@
 Uses a FakeHistory serving synthetic day-chains so no network is touched.
 """
 
+import math
+
 import pandas as pd
 import pytest
 
 from options_trader.backtest.managed import (
     ManagedBacktestEngine, weekly_entry_days,
 )
-from options_trader.signals.credit import CreditVariantConfig
+from options_trader.signals.credit import (
+    CreditLeg, CreditPosition, CreditVariantConfig,
+)
 
 # 2026-01-05 is a Monday; expiration 2026-02-13 is 39 DTE.
 ENTRY = "2026-01-05"
@@ -195,6 +199,42 @@ class TestExitRules:
         assert t.pnl >= -t.max_loss - 1e-6
 
 
+class TestCloseQuotesNanGuard:
+    """A thin Databento quote (seen live on a real RIVN put spread) can
+    carry a NaN bid/ask. _close_quotes must treat that leg as unquoted
+    (fall back to the Black-Scholes model mark) rather than let the NaN
+    through -- a NaN exit_cost silently produces a NaN trade P&L, which
+    then poisons the running equity total for every trade after it."""
+
+    def test_nan_quote_falls_back_to_model_mark(self):
+        pos = CreditPosition(
+            underlying=SYMBOL, variant="put_spread", entry_date=ENTRY,
+            expiration=EXPIRATION, dte_at_entry=39, spot_at_entry=100.0,
+            legs=[
+                CreditLeg(type="put", strike=95.0, side=-1,
+                         entry_bid=1.0, entry_ask=1.2, entry_delta=-0.3,
+                         entry_iv=0.3),
+                CreditLeg(type="put", strike=90.0, side=1,
+                         entry_bid=0.3, entry_ask=0.5, entry_delta=-0.15,
+                         entry_iv=0.3),
+            ],
+            credit_mid=0.7, credit=0.6, credit_frac=0.14, max_loss=4.4,
+        )
+        chain = pd.DataFrame([
+            {"expiration": EXPIRATION, "type": "put", "strike": 95.0,
+             "bid": float("nan"), "ask": float("nan")},
+            {"expiration": EXPIRATION, "type": "put", "strike": 90.0,
+             "bid": 0.25, "ask": 0.45},
+        ])
+        engine = ManagedBacktestEngine(FakeHistory({}), spot_lookup())
+        result = engine._close_quotes(pos, chain, spot=98.0, day="2026-01-20")
+        assert result is not None
+        cost, half_spread, source = result
+        assert not math.isnan(cost)
+        assert not math.isnan(half_spread)
+        assert source == "mixed"   # NaN leg model-marked, other leg quoted
+
+
 class TestCadence:
     def test_weekly_entry_days_one_per_iso_week(self):
         days = trading_days("2026-01-05", "2026-01-30")
@@ -235,6 +275,48 @@ class TestCadence:
         assert short_entry.exit_reason == "time_exit"
         assert exit_dte <= 12
         assert short_entry.days_held >= 7
+
+
+class TestAtrAndPerVariantDte:
+    def test_atr_floor_pushes_short_put(self):
+        history = FakeHistory({d: (1.0 if d == ENTRY else 0.01)
+                               for d in trading_days()})
+        cfg = CreditVariantConfig(
+            name="atr_put", short_put_delta=0.30, min_credit_frac=0.0,
+            atr_mult=2.0,
+        )
+        engine = ManagedBacktestEngine(
+            history, spot_lookup(),
+            atr_lookup={(SYMBOL, ENTRY): 5.0},
+        )
+        result = engine.run([SYMBOL], ENTRY, ENTRY, [cfg])
+        assert len(result.trades) == 1
+        assert result.trades[0].short_put_strike == 90.0
+        assert result.trades[0].atr_at_entry == 5.0
+
+    def test_per_variant_expiration_windows(self):
+        weekly_exp = "2026-01-12"  # 7 DTE from ENTRY
+
+        class TwoExpHistory(FakeHistory):
+            def day_chains(self, symbol, day, max_dte=50):
+                chain = super().day_chains(symbol, day, max_dte)
+                if chain.empty:
+                    return chain
+                extra = chain.copy()
+                extra["expiration"] = weekly_exp
+                return pd.concat([chain, extra], ignore_index=True)
+
+        weekly = CreditVariantConfig(
+            name="weekly", short_put_delta=0.30, min_credit_frac=0.0,
+            min_dte=5, max_dte=14, target_dte=7,
+        )
+        history = TwoExpHistory({d: (1.0 if d == ENTRY else 0.01)
+                                 for d in trading_days()})
+        engine = ManagedBacktestEngine(history, spot_lookup())
+        result = engine.run([SYMBOL], ENTRY, ENTRY, [PUT_SPREAD, weekly])
+        by_var = {t.variant: t.expiration for t in result.trades}
+        assert by_var["put_spread"] == EXPIRATION
+        assert by_var["weekly"] == weekly_exp
 
 
 class TestSummary:

@@ -29,6 +29,7 @@ from options_trader.backtest.managed import (
 )
 from options_trader.data.dolthub import DoltHubHistory, build_spot_lookup
 from options_trader.data.unusual_whales import UWHistory, load_api_key
+from options_trader.signals.atr_iv import fetch_atr_lookup
 from options_trader.signals.credit import VALIDATED, VALIDATED_UNIVERSE, VARIANTS
 
 
@@ -96,7 +97,12 @@ def main() -> int:
     history.prefetch(args.symbols, sorted(checkpoint_days),
                      workers=args.workers)
 
-    engine = ManagedBacktestEngine(history, spots)
+    atr_lookup = {}
+    if any(v.atr_mult is not None for v in variants):
+        print("Building ATR-14 lookup from yfinance OHLC (no lookahead)...")
+        atr_lookup = fetch_atr_lookup(args.symbols, args.start, args.end)
+        print(f"  ATR days: {len(atr_lookup)}")
+    engine = ManagedBacktestEngine(history, spots, atr_lookup=atr_lookup)
     result = engine.run(args.symbols, args.start, args.end, variants,
                         progress=True)
 
@@ -132,14 +138,14 @@ def main() -> int:
     summary_path = out_dir / f"credit_backtest_{stamp}_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
 
-    print(f"\n{'variant':<12} {'trades':>6} {'win%':>6} {'exp/trade':>10} "
+    print(f"\n{'variant':<20} {'trades':>6} {'win%':>6} {'exp/trade':>10} "
           f"{'total':>10} {'PF':>6} {'maxDD':>9} {'worst':>9}")
     for v in variants:
         s = result.summary(variant=v.name)
         if s["trades"] == 0:
-            print(f"{v.name:<12} {'0':>6}  (no trades)")
+            print(f"{v.name:<20} {'0':>6}  (no trades)")
             continue
-        print(f"{v.name:<12} {s['trades']:>6} {s['win_rate']*100:>5.1f}% "
+        print(f"{v.name:<20} {s['trades']:>6} {s['win_rate']*100:>5.1f}% "
               f"{s['expectancy_per_trade']:>10.2f} {s['total_pnl']:>10.2f} "
               f"{s['profit_factor']:>6.2f} {s['max_drawdown']:>9.2f} "
               f"{s['worst_trade']:>9.2f}")

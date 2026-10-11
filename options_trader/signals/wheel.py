@@ -62,6 +62,11 @@ class WheelConfig:
     put_max_dte: int = 45
     put_min_credit_frac: float = 0.08       # spec: 8% of width (or $0.15 on $1-wide)
     put_min_short_bid: float = 0.05
+    # Phase A profit-take, as a fraction of entry credit captured -- mirrors
+    # CreditVariantConfig's field of the same name (spec section 11's
+    # 40%/50%/70% sensitivity sweep needs this exposed per-phase rather than
+    # hardcoded to phase_a_variant()'s CreditVariantConfig default).
+    put_profit_take_frac: float = 0.50
     # Deliberately NOT the spec's shared 21-DTE time stop (see
     # phase_a_variant's docstring): ANY positive threshold closes the
     # spread in cash strictly before day == expiration, and
@@ -126,6 +131,7 @@ class WheelConfig:
             min_dte=self.put_min_dte, max_dte=self.put_max_dte,
             min_credit_frac=self.put_min_credit_frac,
             min_short_bid=self.put_min_short_bid,
+            profit_take_frac=self.put_profit_take_frac,
             hard_stop_credit_mult=self.hard_stop_credit_mult,
             time_exit_dte=self.put_time_exit_dte,
             time_exit_frac=self.put_time_exit_frac,

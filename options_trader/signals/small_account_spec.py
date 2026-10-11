@@ -1,13 +1,21 @@
 """Ticker universe and per-strategy configs for the small-account options
-income backtest spec (options_income_backtest_spec.md), narrowed to the 3
-tickers this repo's free data source (DoltHub) actually covers 2021-present:
-F, AAL, GME.
+income backtest spec (options_income_backtest_spec.md).
 
-SOFI, RIVN, SNAP, and AMC were dropped: DoltHub has zero option-chain rows
-for all four across every date sampled 2019-2026. MARA and CLSK were also
-dropped: MARA only has data from 2025 onward and CLSK only from 2026 --
-both far short of the multi-year backtest window the spec wants. See the
-plan discussion in this repo's PR description for the coverage probe.
+Originally narrowed to the 3 tickers this repo's free data source (DoltHub)
+actually covers 2021-present: F, AAL, GME. SOFI, RIVN, SNAP, and AMC had
+zero DoltHub option-chain rows across every date sampled 2019-2026; MARA
+and CLSK only had a few months each -- far short of the multi-year window
+the spec wants. See the plan discussion in this repo's PR description for
+that coverage probe.
+
+The other 6 spec tickers are back in as of the Databento (OPRA.PILLAR)
+source (options_trader/data/databento.py), which covers all of them back
+to 2013 -- routed in via MultiSourceHistory (options_trader/data/
+multi_source.py) alongside DoltHub for F/AAL/GME, since Databento bills by
+data pulled and DoltHub is free where it already works. Restored to their
+original spec roles: SOFI/RIVN join the core wheel+bull-put sleeves
+(S1/S2), SNAP/AMC/MARA/CLSK join the satellite condor sleeve (S3)
+alongside GME.
 
 S2 and S3 need no new state-machine code -- signals/credit.py's
 build_position already handles both a single-sided put spread and a
@@ -29,12 +37,13 @@ from __future__ import annotations
 from .credit import CreditVariantConfig
 from .wheel import WheelConfig
 
-# --- Ticker universe (narrowed; see module docstring) ---
-S1_TICKERS = ["F", "AAL"]
-S2_TICKERS = ["F", "AAL"]
-S3_TICKERS = ["GME"]   # spec's satellite book (MARA/CLSK/SNAP/AMC) has no
-                       # usable multi-year chain data; GME is the only
-                       # spec-listed satellite name this repo can backtest.
+# --- Ticker universe (see module docstring) ---
+S1_TICKERS = ["F", "AAL", "SOFI", "RIVN"]
+S2_TICKERS = ["F", "AAL", "SOFI", "RIVN"]
+S3_TICKERS = ["GME", "SNAP", "AMC", "MARA", "CLSK"]
+# Databento-backed tickers (routed to DatabentoHistory; F/AAL/GME stay on
+# the free DoltHub source). See multi_source.py.
+DATABENTO_TICKERS = ["SOFI", "RIVN", "SNAP", "AMC", "MARA", "CLSK"]
 
 # --- S1_WHEEL_CORE ---
 S1_WHEEL_CORE = WheelConfig(

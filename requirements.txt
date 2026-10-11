@@ -2,3 +2,5 @@ pandas>=2.0
 yfinance>=0.2.40
 requests>=2.31
 pytest>=8.0
+databento>=0.85
+matplotlib>=3.9

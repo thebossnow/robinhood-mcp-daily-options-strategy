@@ -277,7 +277,21 @@ class DoltHubHistory:
 
 
 def build_spot_lookup(symbols: list[str], start: str, end: str) -> dict:
-    """Daily closes from yfinance keyed by (symbol, YYYY-MM-DD)."""
+    """Daily closes from yfinance keyed by (symbol, YYYY-MM-DD).
+
+    yfinance occasionally returns a NaN Close on an otherwise-listed row
+    (seen live on a full 2021-2026/9-ticker pull -- rare, but real). A NaN
+    stored here poisons everything downstream: every caller's "missing
+    data" guard checks `is None` or `spot <= 0` / `not spot`, and NaN fails
+    both (NaN <= 0 is False, and NaN is truthy) -- so a NaN spot sails
+    through as if it were a normal price, then turns every price/delta
+    computation it touches into NaN too, which eventually corrupts a
+    running equity total permanently once a NaN P&L gets added to it.
+    Skipping the row here instead makes a NaN day look exactly like a
+    missing day to every existing guard, with no caller changes needed.
+    """
+    import math
+
     import yfinance as yf
     lookup: dict[tuple[str, str], float] = {}
     end_exclusive = date_cls.fromordinal(
@@ -288,5 +302,8 @@ def build_spot_lookup(symbols: list[str], start: str, end: str) -> dict:
             start=start, end=end_exclusive, auto_adjust=False
         )
         for ts, row in hist.iterrows():
-            lookup[(symbol, ts.strftime("%Y-%m-%d"))] = float(row["Close"])
+            close = float(row["Close"])
+            if math.isnan(close):
+                continue
+            lookup[(symbol, ts.strftime("%Y-%m-%d"))] = close
     return lookup

@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 from options_trader.signals.credit import (
-    VARIANTS, CreditVariantConfig, bs_delta, build_position,
+    VALIDATED, VARIANTS, CreditVariantConfig, atr_short_bound,
+    bs_delta, build_position,
 )
 
 
@@ -30,9 +31,10 @@ def make_chain(spot: float = 100.0) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build(cfg, chain=None, spot=100.0):
+def build(cfg, chain=None, spot=100.0, atr=None):
     return build_position(chain if chain is not None else make_chain(spot),
-                          spot, "TEST", "2026-01-05", "2026-02-13", 39, cfg)
+                          spot, "TEST", "2026-01-05", "2026-02-13", 39, cfg,
+                          atr=atr)
 
 
 class TestPutSpread:
@@ -126,3 +128,57 @@ class TestBsDeltaFallback:
         assert pos is not None
         short = [l for l in pos.legs if l.side == -1][0]
         assert short.strike < 100.0   # still an OTM put
+
+
+class TestAtrDeltaWeekly:
+    def test_bound_put_is_spot_minus_mult_atr(self):
+        assert atr_short_bound(100.0, 5.0, 2.0, "put") == 90.0
+        assert atr_short_bound(100.0, 5.0, 2.0, "call") == 110.0
+
+    def test_delta_inside_band_is_pushed_otm(self):
+        # 30Δ put on the synthetic chain is strike 95. 2×ATR=10 → bound 90.
+        cfg = CreditVariantConfig(
+            name="atr", short_put_delta=0.30, short_call_delta=None,
+            min_credit_frac=0.0, atr_mult=2.0,
+        )
+        pos = build(cfg, atr=5.0)
+        assert pos is not None
+        short = [l for l in pos.legs if l.side == -1][0]
+        wing = [l for l in pos.legs if l.side == +1][0]
+        assert short.strike == 90.0
+        assert wing.strike < short.strike
+
+    def test_delta_already_outside_band_is_kept(self):
+        # Same 30Δ/95 put, ATR=1 → bound 98. 95 is already further OTM.
+        cfg = CreditVariantConfig(
+            name="atr", short_put_delta=0.30, short_call_delta=None,
+            min_credit_frac=0.0, atr_mult=2.0,
+        )
+        pos = build(cfg, atr=1.0)
+        assert pos is not None
+        short = [l for l in pos.legs if l.side == -1][0]
+        assert abs(short.strike - 95.0) <= 1.0
+
+    def test_missing_atr_refuses_when_mult_set(self):
+        cfg = CreditVariantConfig(
+            name="atr", short_put_delta=0.30, atr_mult=2.0,
+            min_credit_frac=0.0,
+        )
+        assert build(cfg, atr=None) is None
+        assert build(cfg, atr=0.0) is None
+
+    def test_no_listed_strike_beyond_bound_returns_none(self):
+        cfg = CreditVariantConfig(
+            name="atr", short_put_delta=0.30, atr_mult=2.0,
+            min_credit_frac=0.0,
+        )
+        # bound = 100 - 2*40 = 20, chain only goes to 80
+        assert build(cfg, atr=40.0) is None
+
+    def test_weekly_variant_is_configured(self):
+        v = VALIDATED["spy_weekly_atr15"]
+        assert v.short_put_delta == 0.15
+        assert v.short_call_delta is None
+        assert v.atr_mult == 2.0
+        assert (v.min_dte, v.max_dte, v.target_dte) == (5, 14, 7)
+        assert v.exit_on_breach is False

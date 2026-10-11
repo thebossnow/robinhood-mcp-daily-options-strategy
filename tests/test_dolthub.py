@@ -4,11 +4,14 @@ from unittest import mock
 
 import pytest
 
+import pandas as pd
+
 from options_trader.config import StrategyConfig
 from options_trader.data.dolthub import (
     PAGE_SIZE,
     DoltHubClient,
     DoltHubImporter,
+    build_spot_lookup,
     rows_to_snapshots,
 )
 from options_trader.signals import generate_candidates
@@ -146,3 +149,25 @@ class TestClient:
         assert "`date` = '2026-06-01'" in sql
         assert "BETWEEN '2026-06-01' AND '2026-06-08'" in sql
         assert "ORDER BY" in sql
+
+
+class TestBuildSpotLookup:
+    """A NaN Close from yfinance (seen live on a real multi-year pull) must
+    not enter the lookup: every downstream caller's missing-data guard
+    checks `is None` or `spot <= 0` / `not spot`, and NaN satisfies
+    neither, so an un-filtered NaN silently poisons every price computation
+    it touches -- see build_spot_lookup's docstring."""
+
+    def test_nan_close_is_dropped(self):
+        idx = pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-03"])
+        fake_hist = pd.DataFrame(
+            {"Close": [100.0, float("nan"), 102.0]}, index=idx)
+        fake_ticker = mock.Mock()
+        fake_ticker.history.return_value = fake_hist
+        with mock.patch("yfinance.Ticker", return_value=fake_ticker):
+            lookup = build_spot_lookup(["SPY"], "2026-06-01", "2026-06-03")
+        assert lookup == {
+            ("SPY", "2026-06-01"): 100.0,
+            ("SPY", "2026-06-03"): 102.0,
+        }
+        assert ("SPY", "2026-06-02") not in lookup

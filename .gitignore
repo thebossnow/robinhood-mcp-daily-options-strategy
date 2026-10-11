@@ -13,6 +13,10 @@ data_snapshots_eodhd/
 data_eodhd_cache/
 data_snapshots_uw/
 data_uw_cache/
+data_databento_cache/
 
 # runtime logs
 logs/
+
+# WSL zone-identifier artifacts on downloaded files
+*:Zone.Identifier

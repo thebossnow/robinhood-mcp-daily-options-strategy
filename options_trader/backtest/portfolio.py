@@ -105,6 +105,8 @@ class PortfolioTrade:
     contracts: int
     pnl: float                   # dollars, contracts already applied
     equity_after: float
+    credit_per_share: float | None = None      # credit-structure exits only
+    hard_stop_mult: float | None = None        # credit-structure exits only
 
 
 @dataclass
@@ -231,7 +233,8 @@ class PortfolioBacktestEngine:
                                                 all_days)
                 if closed is None:
                     continue
-                reason, pnl_per_contract, next_phase, next_lot = closed
+                (reason, pnl_per_contract, next_phase, next_lot,
+                 credit_per_share, hard_stop_mult) = closed
                 pnl_dollars = round(pnl_per_contract * struct.contracts, 2)
                 equity += pnl_dollars
                 peak_equity = max(peak_equity, equity)
@@ -241,6 +244,7 @@ class PortfolioBacktestEngine:
                     exit_date=day, expiration=struct.position.expiration,
                     exit_reason=reason, contracts=struct.contracts,
                     pnl=pnl_dollars, equity_after=round(equity, 2),
+                    credit_per_share=credit_per_share, hard_stop_mult=hard_stop_mult,
                 ))
                 del open_structures[key]
                 if reason in STOP_OUT_REASONS:
@@ -356,11 +360,18 @@ class PortfolioBacktestEngine:
     def _check_and_settle(
         self, struct: OpenStructure, day: str, spot: float | None,
         chains: pd.DataFrame, all_days: list[str],
-    ) -> tuple[str, float, str | None, ShareLot | None] | None:
+    ) -> tuple[str, float, str | None, ShareLot | None, float | None, float | None] | None:
         """Returns (exit_reason, pnl_per_contract_dollars, next_wheel_phase,
-        next_wheel_lot) or None if the structure is still open.
-        pnl_per_contract_dollars is the P&L for ONE contract (100 shares'
-        worth); the caller scales by struct.contracts."""
+        next_wheel_lot, credit_per_share, hard_stop_mult) or None if the
+        structure is still open. pnl_per_contract_dollars is the P&L for ONE
+        contract (100 shares' worth); the caller scales by struct.contracts.
+        credit_per_share/hard_stop_mult are populated for both credit-
+        structure exits and covered-call exits (both can hit hard_stop --
+        see the gap-risk diagnostic in robinhood-mcp-small-account-income-
+        backtest memory, which initially missed the covered-call path and
+        undercounted); None only for final settlement outcomes (expiry
+        assignment/call-away), which don't have a single "credit" concept
+        in the same sense."""
         if struct.kind == "credit":
             cfg = (struct.cfg if struct.wheel_phase is None
                   else struct.cfg.phase_a_variant())
@@ -369,7 +380,8 @@ class PortfolioBacktestEngine:
             if trade is None:
                 return None
             if struct.wheel_phase != "A":
-                return trade.exit_reason, trade.pnl, None, None
+                return (trade.exit_reason, trade.pnl, None, None,
+                       trade.credit, cfg.hard_stop_credit_mult)
             # Wheel Phase A: expiry settlement can assign into shares;
             # any earlier exit (profit/hard_stop/time_exit) just closes
             # the spread for cash and restarts Phase A next cycle.
@@ -377,9 +389,10 @@ class PortfolioBacktestEngine:
                 outcome, cash_pnl_per_share, lot = resolve_put_spread_settlement(
                     struct.position, float(spot) if spot else trade.spot_at_exit,
                     contracts=struct.contracts)
-                return outcome, cash_pnl_per_share * 100.0, \
-                    ("B" if lot else "A"), lot
-            return trade.exit_reason, trade.pnl, "A", None
+                return (outcome, cash_pnl_per_share * 100.0,
+                       ("B" if lot else "A"), lot, None, None)
+            return (trade.exit_reason, trade.pnl, "A", None,
+                   trade.credit, cfg.hard_stop_credit_mult)
 
         # covered call (struct.kind == "covered_call")
         wcfg: WheelConfig = struct.cfg
@@ -391,12 +404,14 @@ class PortfolioBacktestEngine:
             pnl_per_share = struct.position.credit - exit_cost
             # Selling a covered call early never touches the shares --
             # they're carried forward into the next Phase B cycle.
-            return reason, pnl_per_share * 100.0, "B", struct.position.lot
+            return (reason, pnl_per_share * 100.0, "B", struct.position.lot,
+                   struct.position.credit, wcfg.hard_stop_credit_mult)
         if day >= struct.position.expiration:
             settle_spot = float(spot) if spot else struct.position.spot_at_entry
             outcome, pnl_per_share = resolve_covered_call_settlement(
                 struct.position, settle_spot)
             next_phase = "A" if outcome == "called_away" else "B"
             next_lot = None if outcome == "called_away" else struct.position.lot
-            return outcome, pnl_per_share * 100.0, next_phase, next_lot
+            return (outcome, pnl_per_share * 100.0, next_phase, next_lot,
+                   None, None)
         return None

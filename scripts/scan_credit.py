@@ -30,6 +30,7 @@ from options_trader.config import StrategyConfig
 from options_trader.execution.paper import PaperBroker
 from options_trader.risk.vol_regime import fetch_vix_closes
 from options_trader.journal import Journal
+from options_trader.signals.atr_iv import fetch_atr14
 from options_trader.signals.credit import (
     VALIDATED, CreditVariantConfig, build_position, leg_passes_live_liquidity,
 )
@@ -101,6 +102,11 @@ def main() -> int:
                   for r in journal.open_credit_positions()}
 
     chain_cache: dict[str, object] = {}  # expiration -> snap
+    atr = fetch_atr14(underlying)
+    if atr is None:
+        print(f"{underlying}: ATR-14 unavailable — ATR-gated variants will skip")
+    else:
+        print(f"{underlying}: ATR-14 ${atr:.2f}")
 
     for name, vcfg in VALIDATED.items():
         is_weekly = vcfg.max_dte <= WEEKLY_MAX_DTE
@@ -134,9 +140,19 @@ def main() -> int:
         print(f"{name}: {underlying} {expiration} ({snap.dte} DTE), spot {snap.spot:.2f}, "
               f"{len(liquid)}/{len(snap.chain)} contracts pass liquidity")
 
+        if vcfg.atr_mult is not None:
+            if atr is None:
+                msg = f"{name}: NO QUALIFYING TRADE — ATR unavailable"
+                print(msg)
+                if not args.dry_run:
+                    journal.log_no_trade(msg, strategy="credit")
+                continue
+            print(f"{name}: ATR-14 ${atr:.2f}  {vcfg.atr_mult:g}×ATR put floor "
+                  f"{snap.spot - vcfg.atr_mult * atr:.2f}")
+
         pos = build_position(liquid, snap.spot, underlying,
                              today.isoformat(), expiration, snap.dte, vcfg,
-                             cfg.slippage_half_spread_frac)
+                             cfg.slippage_half_spread_frac, atr=atr)
         if pos is None:
             msg = f"{name}: NO QUALIFYING TRADE (gates failed on live chain)"
             print(msg)

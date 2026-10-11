@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Small-account options income backtest (options_income_backtest_spec.md)
-over DoltHub EOD history, on the ticker universe this repo can actually
-back with real chain data: F, AAL, GME (see
-options_trader/signals/small_account_spec.py for why the spec's other six
-tickers were dropped).
+over the repo's full spec ticker universe: F/AAL/GME on the free DoltHub
+EOD source, SOFI/RIVN/SNAP/AMC/MARA/CLSK on Databento's OPRA feed (see
+options_trader/data/databento.py -- DoltHub has no usable chain history for
+those six), routed together by MultiSourceHistory.
 
     python scripts/backtest_income.py --start 2021-01-01 --end 2026-08-27
 
-Runs S1 (wheel) on F/AAL, S2 (bull put) on F/AAL, and S3 (iron condor) on
-GME as one combined book (portfolio.py's caps/drawdown-halt apply across
-all three), then per-sleeve. Queries DoltHub lazily with an on-disk cache
-(data_dolthub_cache/), so the first run over a long range takes a while
-and reruns are fast.
+Runs S1 (wheel) on F/AAL/SOFI/RIVN, S2 (bull put) on the same four, and S3
+(iron condor) on GME/SNAP/AMC/MARA/CLSK as one combined book (portfolio.py's
+caps/drawdown-halt apply across all three), then per-sleeve. Run
+scripts/prefetch_databento.py first to warm the Databento cache -- this
+script does not re-issue that (paid) prefetch itself, only DoltHub's (free)
+one; an unwarmed Databento ticker will fetch live, slowly and at cost, one
+symbol-day at a time.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import json
 import logging
 import sys
@@ -29,14 +32,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from options_trader.backtest.portfolio import (
     PortfolioBacktestEngine, PortfolioConfig, Sleeve,
 )
+from options_trader.data.databento import DatabentoHistory, load_api_key
 from options_trader.data.dolthub import DoltHubHistory, build_spot_lookup
+from options_trader.data.multi_source import MultiSourceHistory
 from options_trader.reporting.regime import (
     compute_sma50, fetch_vix_closes, group_by, split_walk_forward,
     summarize_pnls, tag_trades,
 )
 from options_trader.signals.small_account_spec import (
-    S1_TICKERS, S1_WHEEL_CORE, S2_BULL_PUT, S2_TICKERS, S3_IC_SATELLITE,
-    S3_TICKERS,
+    DATABENTO_TICKERS, S1_TICKERS, S1_WHEEL_CORE, S2_BULL_PUT, S2_TICKERS,
+    S3_IC_SATELLITE, S3_TICKERS,
 )
 
 # Spec's window: train 2021-2023, test 2024-present.
@@ -77,34 +82,71 @@ def main() -> int:
     ap.add_argument("--end", required=True)
     ap.add_argument("--starting-equity", type=float, default=10_000.0)
     ap.add_argument("--cache-dir", default="data_dolthub_cache")
+    ap.add_argument("--databento-cache-dir", default="data_databento_cache")
     ap.add_argument("--out-dir", default="runs")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--profit-take", type=float, default=None,
+                    help="Override every sleeve's profit-take fraction "
+                         "(spec section 11's 40%%/50%%/70%% sensitivity "
+                         "sweep). Default: each sleeve's own configured "
+                         "value (0.50 everywhere as of this spec).")
+    ap.add_argument("--sleeves", default="S1_WHEEL_CORE,S2_BULL_PUT,S3_IC_SATELLITE",
+                    help="Comma-separated sleeve IDs to run as one book "
+                         "(default: all three, the combined book). Pass a "
+                         "single sleeve to get that strategy's OWN isolated "
+                         "equity curve -- report_income.py's consistency "
+                         "score needs each sleeve's own drawdown, which the "
+                         "combined book's shared equity/drawdown-halt "
+                         "can't isolate.")
     args = ap.parse_args()
+    wanted_sleeves = set(args.sleeves.split(","))
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
 
     all_tickers = sorted(set(S1_TICKERS) | set(S2_TICKERS) | set(S3_TICKERS))
+    dolthub_tickers = sorted(set(all_tickers) - set(DATABENTO_TICKERS))
     spot_end = (date.fromisoformat(args.end) + timedelta(days=60)).isoformat()
     print(f"Building spot lookup from yfinance: {all_tickers} "
           f"{args.start}..{spot_end}")
     spots = build_spot_lookup(all_tickers, args.start, spot_end)
 
-    history = DoltHubHistory(cache_dir=args.cache_dir)
+    dolthub_history = DoltHubHistory(cache_dir=args.cache_dir)
+    databento_history = DatabentoHistory(
+        api_key=load_api_key("DATABENTO_API_KEY"),
+        cache_dir=args.databento_cache_dir, spot_lookup=spots)
+    history = MultiSourceHistory(
+        {t: databento_history for t in DATABENTO_TICKERS},
+        default=dolthub_history)
+
     all_days = sorted({d for (s, d) in spots})
-    print(f"Prefetching up to {len(all_tickers) * len(all_days)} "
-          f"symbol-day chains (cached ones are free)...")
-    history.prefetch(all_tickers, all_days, workers=args.workers)
+    print(f"Prefetching up to {len(dolthub_tickers) * len(all_days)} "
+          f"DoltHub symbol-day chains (free, cached ones are already free)...")
+    dolthub_history.prefetch(dolthub_tickers, all_days, workers=args.workers)
+    print("Databento tickers use the cache warmed by "
+          "scripts/prefetch_databento.py; any cache miss here fetches live "
+          "at cost -- run that script first for a long backtest range.")
+
+    wheel_cfg, s2_cfg, s3_cfg = S1_WHEEL_CORE, S2_BULL_PUT, S3_IC_SATELLITE
+    if args.profit_take is not None:
+        wheel_cfg = dataclasses.replace(
+            wheel_cfg, put_profit_take_frac=args.profit_take,
+            call_profit_take_frac=args.profit_take)
+        s2_cfg = dataclasses.replace(s2_cfg, profit_take_frac=args.profit_take)
+        s3_cfg = dataclasses.replace(s3_cfg, profit_take_frac=args.profit_take)
 
     cfg = PortfolioConfig(starting_equity=args.starting_equity)
     sleeves = [
         Sleeve(sleeve_id="S1_WHEEL_CORE", tickers=S1_TICKERS,
-              is_satellite=False, kind="wheel", wheel_cfg=S1_WHEEL_CORE),
+              is_satellite=False, kind="wheel", wheel_cfg=wheel_cfg),
         Sleeve(sleeve_id="S2_BULL_PUT", tickers=S2_TICKERS,
-              is_satellite=False, kind="credit", credit_cfg=S2_BULL_PUT),
+              is_satellite=False, kind="credit", credit_cfg=s2_cfg),
         Sleeve(sleeve_id="S3_IC_SATELLITE", tickers=S3_TICKERS,
-              is_satellite=True, kind="credit", credit_cfg=S3_IC_SATELLITE),
+              is_satellite=True, kind="credit", credit_cfg=s3_cfg),
     ]
+    sleeves = [s for s in sleeves if s.sleeve_id in wanted_sleeves]
+    if not sleeves:
+        raise SystemExit(f"--sleeves matched none of {wanted_sleeves!r}")
 
     engine = PortfolioBacktestEngine(history, spots, cfg)
     result = engine.run(sleeves, args.start, args.end)
@@ -154,11 +196,12 @@ def main() -> int:
         w = csv.writer(f)
         w.writerow(["sleeve_id", "underlying", "kind", "entry_date",
                    "exit_date", "expiration", "exit_reason", "contracts",
-                   "pnl", "equity_after"])
+                   "pnl", "equity_after", "credit_per_share", "hard_stop_mult"])
         for t in result.trades:
             w.writerow([t.sleeve_id, t.underlying, t.kind, t.entry_date,
                        t.exit_date, t.expiration, t.exit_reason,
-                       t.contracts, t.pnl, t.equity_after])
+                       t.contracts, t.pnl, t.equity_after,
+                       t.credit_per_share, t.hard_stop_mult])
 
     equity_path = out_dir / f"income_equity_{stamp}.csv"
     with equity_path.open("w", newline="") as f:
