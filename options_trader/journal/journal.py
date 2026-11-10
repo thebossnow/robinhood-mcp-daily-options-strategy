@@ -276,12 +276,30 @@ class Journal:
             return None
         return json.loads(row["candidate_json"])
 
-    def open_risk(self) -> float:
-        """Total max loss currently at risk across open positions."""
-        val = self._conn.execute(
-            "SELECT COALESCE(SUM(max_loss), 0) FROM trades WHERE status='open'"
-        ).fetchone()[0]
+    def open_risk(self, strategy: str | None = None) -> float:
+        """Total max loss currently at risk across open positions.
+
+        `strategy=None` (the default) sums every book, which is what the
+        risk manager's portfolio-heat check uses. Pass a book tag for that
+        book's share (reporting only).
+        """
+        query = ("SELECT COALESCE(SUM(max_loss), 0) FROM trades "
+                 "WHERE status='open'")
+        params: tuple = ()
+        if strategy is not None:
+            query += " AND strategy=?"
+            params = (strategy,)
+        val = self._conn.execute(query, params).fetchone()[0]
         return float(val)
+
+    def books(self) -> list[str]:
+        """Strategy tags that have at least one real trade (open or
+        settled) in the journal, sorted. No-trade log rows don't count."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT strategy FROM trades WHERE status != 'no_trade' "
+            "ORDER BY strategy"
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def realized_pnl_on(self, day: str) -> float:
         val = self._conn.execute(

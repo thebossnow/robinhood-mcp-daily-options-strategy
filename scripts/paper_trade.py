@@ -83,17 +83,46 @@ def cmd_settle(args) -> int:
 
 
 def cmd_status(args) -> int:
+    """Risk state per book, then an account-wide total.
+
+    The max-open-positions limit and the consecutive-loss kill switch are
+    enforced per book (see RiskManager.check), so the status line reports
+    them per book too. A single unscoped streak could read "3 consecutive
+    losses" while the book about to trade had none. Open risk is shown per
+    book and in total, since portfolio heat is checked account-wide.
+    """
     broker = _broker(args)
     j = broker.journal
+    cfg = broker.cfg
+    books = j.books()
+    if not books:
+        print("No trades in the journal yet.")
+    for book in books:
+        n_open = len(j.open_positions(book))
+        streak = j.consecutive_losses(book)
+        flags = []
+        if n_open >= cfg.max_open_positions:
+            flags.append("AT POSITION LIMIT")
+        if streak >= cfg.max_consecutive_losses:
+            flags.append("KILL SWITCH")
+        flag = f"  [{', '.join(flags)}]" if flags else ""
+        print(f"[{book}] open positions: {n_open}/{cfg.max_open_positions} | "
+              f"open risk ${j.open_risk(book):.0f} | consecutive losses: "
+              f"{streak}/{cfg.max_consecutive_losses}{flag}")
     open_ = j.open_positions()
-    print(f"Open positions: {len(open_)} | open risk ${j.open_risk():.0f} | "
-          f"consecutive losses: {j.consecutive_losses()}")
+    heat_cap = 2.0 * cfg.daily_loss_limit
+    print(f"Account-wide (all books): {len(open_)} open | open risk "
+          f"${j.open_risk():.0f} of ${heat_cap:.0f} heat cap")
     for r in open_:
-        tp = broker.take_profit_target(r)
-        print(f"  #{r.id} {r.underlying} {r.expiration} {r.kind} "
-              f"{r.long_strike:g}/{r.short_strike:g} x{r.contracts} "
-              f"@ {r.entry_debit:.2f} (max loss ${r.max_loss:.0f}) "
-              f"[TP target: spread mid >= {tp:.2f}]")
+        line = (f"  #{r.id} [{r.strategy}] {r.underlying} {r.expiration} "
+                f"{r.kind} {r.long_strike:g}/{r.short_strike:g} x{r.contracts} "
+                f"@ {r.entry_debit:.2f} (max loss ${r.max_loss:.0f})")
+        if r.strategy == "vertical":
+            # The take-profit formula is for debit verticals; credit books
+            # are managed by their own scripts with their own exit rules.
+            tp = broker.take_profit_target(r)
+            line += f" [TP target: spread mid >= {tp:.2f}]"
+        print(line)
     return 0
 
 

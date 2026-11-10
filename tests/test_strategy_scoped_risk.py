@@ -175,3 +175,58 @@ class TestBrokerPassesItsBook:
         tid, check = broker.open_credit(make_condor(credit=3.0), 1)
         assert tid is None
         assert _reasons(check, "kill switch")
+
+
+class TestPaperTradeStatusIsPerBook:
+    """paper_trade.py status used to print one unscoped streak, so it could
+    read '3 consecutive losses' while the income book was clear."""
+
+    def _status(self, tmp_path, capsys):
+        import argparse
+        import json
+        from scripts.paper_trade import cmd_status
+        cfg_path = tmp_path / "cfg.json"
+        cfg_path.write_text(json.dumps(dict(
+            account_equity=50_000.0, max_risk_per_trade_pct=0.05,
+            daily_loss_limit_pct=0.12, max_open_positions=3,
+            max_consecutive_losses=3)))
+        args = argparse.Namespace(journal=str(tmp_path / "journal.db"),
+                                  config=str(cfg_path))
+        assert cmd_status(args) == 0
+        return capsys.readouterr().out
+
+    def test_one_line_per_book_plus_account_total(self, tmp_path, capsys):
+        j = Journal(tmp_path / "journal.db")
+        for _ in range(3):
+            _loss(j, "credit")
+        _open(j, "credit")
+        _win(j, "income")
+        _open(j, "income")
+        _open(j, "income")
+        j.log_no_trade("quiet day", strategy="vertical")
+        j.close()
+
+        out = self._status(tmp_path, capsys)
+        lines = out.splitlines()
+        credit = next(l for l in lines if l.startswith("[credit]"))
+        income = next(l for l in lines if l.startswith("[income]"))
+        assert "open positions: 1/3" in credit
+        assert "consecutive losses: 3/3" in credit
+        assert "KILL SWITCH" in credit
+        assert "open positions: 2/3" in income
+        assert "consecutive losses: 0/3" in income
+        assert "KILL SWITCH" not in income
+        # A no-trade log row is not a book with trades.
+        assert not any(l.startswith("[vertical]") for l in lines)
+        total = next(l for l in lines if l.startswith("Account-wide"))
+        assert "3 open" in total
+        assert "$6600" in total            # 3 condors x $2,200
+        assert "heat cap" in total
+        # Credit-book rows don't get the debit-vertical TP formula.
+        assert "TP target" not in out
+        assert sum("[income]" in l and l.startswith("  #") for l in lines) == 2
+
+    def test_empty_journal(self, tmp_path, capsys):
+        out = self._status(tmp_path, capsys)
+        assert "No trades in the journal yet." in out
+        assert "Account-wide (all books): 0 open" in out
