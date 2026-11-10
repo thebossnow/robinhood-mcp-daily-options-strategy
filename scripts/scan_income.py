@@ -290,7 +290,7 @@ def main() -> int:
         # answer is what keeps the number in the report the operator
         # confirms identical to the number that reaches the journal.
         risk_per = spread_capital_at_risk(max(pos.widths().values()), pos.credit)
-        rcheck = broker.risk.check(risk_per)
+        rcheck = broker.risk.check(risk_per, strategy=INCOME_STRATEGY)
         if not rcheck.allowed:
             _journal_skip(journal, f"{name}: NO QUALIFYING TRADE — risk manager "
                           f"refused: {'; '.join(rcheck.reasons)}", args.dry_run)

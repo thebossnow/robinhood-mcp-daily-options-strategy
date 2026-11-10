@@ -42,8 +42,20 @@ class RiskManager:
         self.vix_provider = vix_provider
 
     def check(self, max_loss_per_contract: float,
-              today: str | None = None) -> RiskCheck:
+              today: str | None = None,
+              strategy: str | None = None) -> RiskCheck:
         """Gate a prospective trade. max_loss_per_contract in dollars.
+
+        `strategy` names the book the trade would join ('vertical',
+        'credit', 'income'). When given, the max-open-positions count and
+        the consecutive-loss kill switch only look at that book's journal
+        rows, so the credit book's positions and losing streak can't block
+        an income entry, and vice versa. When None (the default) both
+        checks count every book, which is the original, stricter behavior.
+
+        The daily loss limit and portfolio heat stay account-wide on
+        purpose: every book draws on the same equity, so a bad day or a
+        heavy book anywhere still limits new risk everywhere.
 
         Returns permission plus the CAPACITY (`RiskCheck.max_contracts`) the
         book has for this structure. Size is decided separately, by
@@ -92,11 +104,13 @@ class RiskManager:
                 if not vol_check.allowed:
                     reasons.append(f"vol regime: {vol_check.reason}")
 
-        # Kill switch: consecutive losses
-        streak = self.journal.consecutive_losses()
+        book = f" in {strategy} book" if strategy else ""
+
+        # Kill switch: consecutive losses (scoped to `strategy` when given)
+        streak = self.journal.consecutive_losses(strategy)
         if streak >= self.cfg.max_consecutive_losses:
             reasons.append(
-                f"kill switch: {streak} consecutive losses "
+                f"kill switch: {streak} consecutive losses{book} "
                 f"(limit {self.cfg.max_consecutive_losses}) — review required"
             )
 
@@ -108,11 +122,12 @@ class RiskManager:
                 f"-{self.cfg.daily_loss_limit:.2f}"
             )
 
-        # Concurrency
-        n_open = len(self.journal.open_positions())
+        # Concurrency (scoped to `strategy` when given)
+        n_open = len(self.journal.open_positions(strategy))
         if n_open >= self.cfg.max_open_positions:
             reasons.append(
-                f"max open positions reached ({n_open}/{self.cfg.max_open_positions})"
+                f"max open positions reached{book} "
+                f"({n_open}/{self.cfg.max_open_positions})"
             )
 
         # Per-trade sizing
