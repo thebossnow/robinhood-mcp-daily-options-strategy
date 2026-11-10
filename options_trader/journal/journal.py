@@ -220,10 +220,21 @@ class Journal:
             raise KeyError(f"No trade with id {trade_id}")
         return _to_record(row)
 
-    def open_positions(self) -> list[TradeRecord]:
-        rows = self._conn.execute(
-            "SELECT * FROM trades WHERE status='open' ORDER BY opened_at"
-        ).fetchall()
+    def open_positions(self, strategy: str | None = None) -> list[TradeRecord]:
+        """Open positions, oldest first.
+
+        `strategy=None` (the default) returns every book, as before. Pass a
+        book tag ('vertical', 'credit', 'income') to see only that book's
+        positions; the risk manager does this so one book's open positions
+        don't count against another book's position limit.
+        """
+        query = "SELECT * FROM trades WHERE status='open'"
+        params: tuple = ()
+        if strategy is not None:
+            query += " AND strategy=?"
+            params = (strategy,)
+        rows = self._conn.execute(query + " ORDER BY opened_at",
+                                  params).fetchall()
         return [_to_record(r) for r in rows]
 
     def open_credit_positions(self,
@@ -280,10 +291,21 @@ class Journal:
         ).fetchone()[0]
         return float(val)
 
-    def consecutive_losses(self) -> int:
+    def consecutive_losses(self, strategy: str | None = None) -> int:
+        """Current losing streak, most recent settled trade first.
+
+        `strategy=None` (the default) counts across every book, as before.
+        Pass a book tag to count only that book's settled trades, so a
+        losing streak in the credit book can't trip the income book's kill
+        switch (or the reverse).
+        """
+        query = "SELECT realized_pnl FROM trades WHERE status != 'open'"
+        params: tuple = ()
+        if strategy is not None:
+            query += " AND strategy=?"
+            params = (strategy,)
         rows = self._conn.execute(
-            """SELECT realized_pnl FROM trades WHERE status != 'open'
-               ORDER BY closed_at DESC, id DESC"""
+            query + " ORDER BY closed_at DESC, id DESC", params
         ).fetchall()
         n = 0
         for r in rows:

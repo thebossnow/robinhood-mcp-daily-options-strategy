@@ -64,7 +64,7 @@ class PaperBroker:
     def open(self, cand: SpreadCandidate, contracts: int = 1,
              notes: str = "") -> tuple[int | None, RiskCheck]:
         """Returns (trade_id, risk_check). trade_id is None if refused."""
-        check = self.risk.check(cand.max_loss)
+        check = self.risk.check(cand.max_loss, strategy="vertical")
         if not check.allowed:
             return None, check
         contracts = min(contracts, check.max_contracts)
@@ -124,7 +124,7 @@ class PaperBroker:
         match what that book's management script reads back, or the
         position is managed by the wrong script or by none at all.
         """
-        check = self.risk.check(pos.max_loss * 100.0)
+        check = self.risk.check(pos.max_loss * 100.0, strategy=strategy)
         if not check.allowed:
             return None, check
         contracts = min(contracts, check.max_contracts)

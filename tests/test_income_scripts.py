@@ -378,6 +378,26 @@ class TestScanEndToEnd:
         cap = 0.20 * 75_000.0
         assert sum(risks) <= cap
 
+    def test_credit_book_losses_do_not_trip_the_income_kill_switch(
+            self, tmp_path, capsys):
+        """The credit book's losing streak and open positions belong to the
+        credit book. Seen in the Oct-Nov 2026 paper journal: every income
+        variant refused for the credit book's kill switch and position
+        count while the income book had no positions of its own."""
+        j = Journal(tmp_path / "j.db")
+        for _ in range(5):
+            tid = j.record_credit_entry(_condor().to_dict(), 1,
+                                        strategy="credit")
+            j.record_exit(tid, 3.40)     # credit 3.30: a $10 loss each
+        assert j.consecutive_losses("credit") == 5
+        for _ in range(3):
+            j.record_credit_entry(_condor().to_dict(), 1, strategy="credit")
+        j.close()
+        _, out = self._run(tmp_path, capsys)
+        assert "kill switch" not in out
+        assert "max open positions" not in out
+        assert "risk percentage" in out
+
 
 class TestBooksAreSeparate:
     """Income and credit positions share one table and one journal file but
